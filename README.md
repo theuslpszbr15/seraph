@@ -36,14 +36,14 @@ Dentro do SERAPH, digite `/connect` e escolha:
 | Opção | O que fazer |
 | --- | --- |
 | **GitHub Copilot** | Aparece um código; abra o endereço mostrado e digite o código. Sem chave. |
-| OpenAI, Anthropic, OpenRouter, Groq, DeepSeek, Gemini | Cole a chave. |
+| OpenAI, Anthropic, OpenRouter, Groq, NVIDIA, DeepSeek, Gemini | Cole a chave. |
 | Ollama, LM Studio | Nada a colar: são servidores locais. |
 | **Outra API compatível com OpenAI** | Informe a URL (`https://…/v1`) e, se houver, a chave. |
 
 Depois, `/models` para escolher o modelo.
 
 Também dá para usar variáveis de ambiente, que têm prioridade sobre a chave salva:
-`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`,
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`, `NVIDIA_API_KEY`, `DEEPSEEK_API_KEY`,
 `GEMINI_API_KEY`.
 
 ## Atalhos

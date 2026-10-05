@@ -72,6 +72,13 @@ test('registro: servidores locais dispensam chave e provedores têm ids únicos'
 	assert.ok(PRESETS.every(spec => spec.kind === 'copilot' || spec.kind === 'anthropic' || spec.kind === 'openai'));
 });
 
+test('registro: NVIDIA aponta para o endpoint compatível e lê NVIDIA_API_KEY', () => {
+	const nvidia = findSpec('nvidia');
+	assert.equal(nvidia?.kind, 'openai');
+	assert.equal(nvidia?.baseUrl, 'https://integrate.api.nvidia.com/v1');
+	assert.equal(nvidia?.envKey, 'NVIDIA_API_KEY');
+});
+
 test('registro: configuração padrão vem completa e persiste', () => {
 	assert.equal(config.read().theme, 'celestial');
 	config.write({...config.read(), model: 'gpt-x'});
