@@ -1,7 +1,8 @@
 import {Box, Text} from 'ink';
 import React from 'react';
-import type {AgentMode} from '../types.js';
 import type {Theme} from '../themes.js';
+import type {AgentMode} from '../types.js';
+import {MODE_LABEL, modeColor} from './Blocks.js';
 import {Input} from './Input.js';
 
 type Props = {
@@ -10,31 +11,26 @@ type Props = {
 	onChange: (value: string) => void;
 	onSubmit: (value: string) => void;
 	mode: AgentMode;
-	modelLabel: string;
+	model: string;
+	provider: string;
 	busy: boolean;
 	focus: boolean;
-	width?: number;
 };
 
-export const MODE_LABEL: Record<AgentMode, string> = {build: 'Construir', plan: 'Planejar'};
-
-export function modeColor(theme: Theme, mode: AgentMode): string {
-	return mode === 'build' ? theme.accent : theme.soft;
-}
-
-/** The OpenCode prompt: a heavy bar on the left, the mode and model underneath. */
-export function Prompt({theme, value, onChange, onSubmit, mode, modelLabel, busy, focus, width}: Props) {
+/** The OpenCode prompt: a raised box with a heavy bar in the mode's colour, mode and model underneath. */
+export function Prompt({theme, value, onChange, onSubmit, mode, model, provider, busy, focus}: Props) {
 	const color = modeColor(theme, mode);
 	return (
 		<Box
 			flexDirection="column"
+			backgroundColor={theme.element}
 			borderStyle="bold"
 			borderColor={color}
 			borderTop={false}
 			borderRight={false}
 			borderBottom={false}
-			paddingLeft={1}
-			{...(width ? {width} : {})}
+			paddingX={2}
+			paddingTop={1}
 		>
 			<Input
 				value={value}
@@ -42,15 +38,22 @@ export function Prompt({theme, value, onChange, onSubmit, mode, modelLabel, busy
 				onSubmit={onSubmit}
 				focus={focus}
 				color={theme.text}
-				dim={theme.dim}
-				placeholder={busy ? 'Trabalhando… (esc interrompe)' : 'Pergunte qualquer coisa…'}
+				dim={theme.muted}
+				placeholder={busy ? 'Trabalhando… escreva a próxima mensagem' : 'Pergunte qualquer coisa… "@" anexa arquivo, "!" roda no terminal'}
 			/>
 			<Text> </Text>
 			<Text>
 				<Text bold color={color}>
 					{MODE_LABEL[mode]}
 				</Text>
-				<Text color={theme.dim}> · {modelLabel}</Text>
+				{model ? (
+					<>
+						<Text color={theme.text}> {model}</Text>
+						<Text color={theme.muted}> {provider}</Text>
+					</>
+				) : (
+					<Text color={theme.muted}> · nenhum modelo · /connect</Text>
+				)}
 			</Text>
 		</Box>
 	);

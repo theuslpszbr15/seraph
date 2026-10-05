@@ -1,5 +1,5 @@
 import {sseMessages} from '../sse.js';
-import type {ChatRequest, ChatResult, FetchLike, Message, Provider, ProviderAuth, ToolCall, Usage} from '../types.js';
+import type {ChatRequest, ChatResult, FetchLike, Message, ModelInfo, Provider, ProviderAuth, ToolCall, Usage} from '../types.js';
 import {failure, trimSlash} from './openai.js';
 
 const REQUEST_TIMEOUT_MS = 300_000;
@@ -117,7 +117,7 @@ export function anthropicProvider(id: string, auth: ProviderAuth, fetchImpl: Fet
 			return {text, toolCalls, ...(usage ? {usage} : {})};
 		},
 
-		async listModels(signal: AbortSignal): Promise<string[]> {
+		async listModels(signal: AbortSignal): Promise<ModelInfo[]> {
 			const {baseUrl, headers} = await auth();
 			const response = await fetchImpl(`${trimSlash(baseUrl)}/v1/models?limit=100`, {
 				headers: {'anthropic-version': '2023-06-01', ...headers},
@@ -125,7 +125,11 @@ export function anthropicProvider(id: string, auth: ProviderAuth, fetchImpl: Fet
 			});
 			if (!response.ok) throw await failure(response);
 			const body = (await response.json()) as {data?: Array<{id?: unknown}>};
-			return (body.data ?? []).map(entry => entry.id).filter((value): value is string => typeof value === 'string');
+			// The API does not report it; every current Claude model has a 200k window.
+			return (body.data ?? [])
+				.map(entry => entry.id)
+				.filter((value): value is string => typeof value === 'string')
+				.map(model => ({id: model, context: 200_000}));
 		},
 	};
 }

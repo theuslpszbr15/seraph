@@ -1,6 +1,6 @@
 {
   "name": "seraph",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "SERAPH — harness de código celestial para o terminal. Qualquer API, login com GitHub Copilot.",
   "type": "module",
   "bin": {
@@ -17,12 +17,12 @@
     "test": "node --import tsx --test tests/*.test.ts tests/*.test.tsx"
   },
   "dependencies": {
-    "ink": "^5.1.0",
-    "react": "^18.3.1"
+    "ink": "^6.8.0",
+    "react": "^19.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "@types/react": "^18.3.12",
+    "@types/react": "^19.3.0",
     "ink-testing-library": "^4.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"

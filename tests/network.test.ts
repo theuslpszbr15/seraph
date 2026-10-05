@@ -54,7 +54,7 @@ test('rede real: lista modelos, envia a chave e conclui um turno com ferramenta'
 		writeFileSync(join(root, 'nota.txt'), 'conteudo-secreto', 'utf8');
 		const provider = openAiProvider('local', async () => ({baseUrl: base, headers: {Authorization: 'Bearer chave-de-teste'}}));
 
-		assert.deepEqual(await provider.listModels(new AbortController().signal), ['modelo-a', 'modelo-b']);
+		assert.deepEqual(await provider.listModels(new AbortController().signal), [{id: 'modelo-a'}, {id: 'modelo-b'}]);
 
 		const streamed: string[] = [];
 		const added = await runTurn({

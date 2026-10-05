@@ -1,6 +1,6 @@
 import {existsSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {findTool, toolsFor} from './tools.js';
+import {findTool, inside, toolsFor} from './tools.js';
 import type {AgentMode, Message, Provider, ToolCall, Usage} from './types.js';
 
 const MAX_STEPS = 25;
@@ -27,6 +27,8 @@ export type TurnOptions = {
 	signal: AbortSignal;
 	approve: Approval;
 	onEvent: (event: AgentEvent) => void;
+	/** Called with the absolute path right before write_file or edit_file touches it. */
+	onBeforeWrite?: (path: string) => void;
 };
 
 export function systemPrompt(mode: AgentMode, root: string): string {
@@ -90,6 +92,9 @@ async function execute(call: ToolCall, options: TurnOptions): Promise<string> {
 
 	onEvent({type: 'tool', id: call.id, name: call.name, summary, status: 'running'});
 	try {
+		if ((call.name === 'write_file' || call.name === 'edit_file') && typeof args['path'] === 'string') {
+			options.onBeforeWrite?.(inside(options.root, args['path']));
+		}
 		const output = await tool.run(args, options.root, options.signal);
 		onEvent({type: 'tool', id: call.id, name: call.name, summary, status: 'done', output});
 		return output;

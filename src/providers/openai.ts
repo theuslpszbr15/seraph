@@ -1,5 +1,5 @@
 import {sseMessages} from '../sse.js';
-import type {ChatRequest, ChatResult, FetchLike, Message, Provider, ProviderAuth, ToolCall, Usage} from '../types.js';
+import type {ChatRequest, ChatResult, FetchLike, Message, ModelInfo, Provider, ProviderAuth, ToolCall, Usage} from '../types.js';
 
 const REQUEST_TIMEOUT_MS = 300_000;
 
@@ -48,7 +48,7 @@ type Delta = {
 };
 
 /** Any server that speaks `/chat/completions`: OpenAI, OpenRouter, Groq, Ollama, Copilot... */
-export function openAiProvider(id: string, auth: ProviderAuth, fetchImpl: FetchLike = fetch): Provider {
+export function openAiProvider(id: string, auth: ProviderAuth, fetchImpl: FetchLike = fetch, options: {streamUsage?: boolean} = {}): Provider {
 	return {
 		id,
 
@@ -61,6 +61,7 @@ export function openAiProvider(id: string, auth: ProviderAuth, fetchImpl: FetchL
 					model,
 					messages: toOpenAiMessages(messages),
 					stream: true,
+					...(options.streamUsage ? {stream_options: {include_usage: true}} : {}),
 					...(tools.length > 0
 						? {
 								tools: tools.map(tool => ({
@@ -118,7 +119,7 @@ export function openAiProvider(id: string, auth: ProviderAuth, fetchImpl: FetchL
 			return {text, toolCalls, ...(usage ? {usage} : {})};
 		},
 
-		async listModels(signal: AbortSignal): Promise<string[]> {
+		async listModels(signal: AbortSignal): Promise<ModelInfo[]> {
 			const {baseUrl, headers} = await auth();
 			const response = await fetchImpl(`${trimSlash(baseUrl)}/models`, {headers, signal});
 			if (!response.ok) throw await failure(response);
@@ -126,10 +127,30 @@ export function openAiProvider(id: string, auth: ProviderAuth, fetchImpl: FetchL
 			const list = Array.isArray(body) ? body : (body as {data?: unknown}).data;
 			if (!Array.isArray(list)) return [];
 			return list
-				.filter((entry): entry is {id: string; model_picker_enabled?: boolean} => typeof (entry as {id?: unknown})?.id === 'string')
+				.filter((entry): entry is RawModel => typeof (entry as {id?: unknown})?.id === 'string')
 				.filter(entry => entry.model_picker_enabled !== false)
-				.map(entry => entry.id)
-				.sort((a, b) => a.localeCompare(b));
+				.map(entry => {
+					const context = contextOf(entry);
+					return context ? {id: entry.id, context} : {id: entry.id};
+				})
+				.sort((a, b) => a.id.localeCompare(b.id));
 		},
 	};
+}
+
+type RawModel = {
+	id: string;
+	model_picker_enabled?: boolean;
+	context_length?: unknown;
+	context_window?: unknown;
+	max_model_len?: unknown;
+	capabilities?: {limits?: {max_context_window_tokens?: unknown}};
+};
+
+/** Each server names the context window differently: Copilot, OpenRouter, Groq, vLLM. */
+export function contextOf(entry: RawModel): number | undefined {
+	for (const value of [entry.capabilities?.limits?.max_context_window_tokens, entry.context_length, entry.context_window, entry.max_model_len]) {
+		if (typeof value === 'number' && value > 0) return value;
+	}
+	return undefined;
 }

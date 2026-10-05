@@ -1,6 +1,7 @@
 import {Box, Text, useInput} from 'ink';
-import React, {useState} from 'react';
+import React, {useEffect, useState} from 'react';
 import type {Theme} from '../themes.js';
+import {isMouse} from './terminal.js';
 
 export type Choice = {id: string; label: string; hint?: string; group?: string};
 
@@ -10,10 +11,14 @@ type Props = {
 	theme: Theme;
 	onPick: (choice: Choice) => void;
 	onCancel: () => void;
+	/** Fired as the selection moves, for live previews. */
+	onHighlight?: (choice: Choice) => void;
+	/** ctrl+d on the selected row. */
+	onDelete?: (choice: Choice) => void;
 	searchable?: boolean;
-	/** Shown instead of the list when nothing matches. */
 	empty?: string;
 	rows?: number;
+	initial?: string;
 };
 
 export function filterChoices(choices: Choice[], query: string): Choice[] {
@@ -22,17 +27,26 @@ export function filterChoices(choices: Choice[], query: string): Choice[] {
 	return choices.filter(choice => `${choice.label} ${choice.hint ?? ''} ${choice.group ?? ''}`.toLowerCase().includes(needle));
 }
 
-export function Select({title, choices, theme, onPick, onCancel, searchable = true, empty = 'Nada por aqui.', rows = 9}: Props) {
+export function Select({title, choices, theme, onPick, onCancel, onHighlight, onDelete, searchable = true, empty = 'Nada por aqui.', rows = 10, initial}: Props) {
 	const [query, setQuery] = useState('');
-	const [index, setIndex] = useState(0);
+	const [index, setIndex] = useState(() => Math.max(choices.findIndex(choice => choice.id === initial), 0));
 	const visible = filterChoices(choices, query);
 	const active = Math.min(index, Math.max(visible.length - 1, 0));
+	const current = visible[active];
+
+	useEffect(() => {
+		if (current) onHighlight?.(current);
+	}, [current?.id]);
 
 	useInput((input, key) => {
+		if (isMouse(input)) return;
 		if (key.escape) return onCancel();
 		if (key.return) {
-			const picked = visible[active];
-			if (picked) onPick(picked);
+			if (current) onPick(current);
+			return;
+		}
+		if (key.ctrl && input === 'd') {
+			if (current && onDelete) onDelete(current);
 			return;
 		}
 		if (key.upArrow) return setIndex(visible.length === 0 ? 0 : (active - 1 + visible.length) % visible.length);
@@ -52,41 +66,48 @@ export function Select({title, choices, theme, onPick, onCancel, searchable = tr
 	const window = visible.slice(start, start + rows);
 
 	return (
-		<Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1}>
+		<Box flexDirection="column" backgroundColor={theme.panel} paddingX={2} paddingY={1}>
 			<Box justifyContent="space-between">
-				<Text bold color={theme.accent}>
+				<Text bold color={theme.text}>
 					{title}
 				</Text>
-				<Text color={theme.dim}>esc</Text>
+				<Text color={theme.muted}>esc</Text>
 			</Box>
 			{searchable ? (
-				<Text color={theme.dim}>
-					{query ? query : 'digite para filtrar'}
-					<Text inverse> </Text>
-				</Text>
-			) : null}
-			{visible.length === 0 ? <Text color={theme.dim}>{empty}</Text> : null}
+				<Box marginY={1}>
+					<Text color={query ? theme.text : theme.muted}>
+						{query || 'Buscar'}
+						<Text inverse> </Text>
+					</Text>
+				</Box>
+			) : (
+				<Text> </Text>
+			)}
+			{visible.length === 0 ? <Text color={theme.muted}>{empty}</Text> : null}
 			{window.map((choice, position) => {
 				const selected = start + position === active;
 				const newGroup = choice.group && choice.group !== window[position - 1]?.group;
 				return (
 					<Box key={choice.id} flexDirection="column">
 						{newGroup ? (
-							<Text bold color={theme.soft}>
-								{choice.group}
-							</Text>
+							<Box marginTop={position === 0 ? 0 : 1}>
+								<Text bold color={theme.accent}>
+									{choice.group}
+								</Text>
+							</Box>
 						) : null}
-						<Box justifyContent="space-between">
-							<Text {...(selected ? {color: theme.accent, bold: true} : {color: theme.text})}>
-								{selected ? '› ' : '  '}
+						<Box justifyContent="space-between" paddingX={1} {...(selected ? {backgroundColor: theme.primary} : {})}>
+							<Text color={selected ? theme.panel : theme.text} bold={selected} wrap="truncate-end">
 								{choice.label}
 							</Text>
-							{choice.hint ? <Text color={theme.dim}>{choice.hint}</Text> : null}
+							{choice.hint ? <Text color={selected ? theme.panel : theme.muted}> {choice.hint}</Text> : null}
 						</Box>
 					</Box>
 				);
 			})}
-			<Text color={theme.dim}>↑↓ mover · enter escolher</Text>
+			<Box marginTop={1}>
+				<Text color={theme.muted}>↑↓ mover · enter escolher{onDelete ? ' · ctrl+d apagar' : ''}</Text>
+			</Box>
 		</Box>
 	);
 }

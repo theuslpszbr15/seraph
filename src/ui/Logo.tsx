@@ -22,13 +22,14 @@ export function Logo({theme, columns, size = 'full'}: Props) {
 	if (size === 'mini') {
 		return (
 			<Text>
-				<Text bold color={theme.accent}>
+				<Text bold color={theme.primary}>
 					✦ {NAME}
 				</Text>
-				<Text color={theme.dim}> · {TAGLINE}</Text>
+				<Text color={theme.muted}> · {TAGLINE}</Text>
 			</Text>
 		);
 	}
+
 	const art = angel();
 	const name = wordmark();
 	const fitsAngel = size === 'full' && columns >= artWidth(art) + 2;
@@ -38,7 +39,7 @@ export function Logo({theme, columns, size = 'full'}: Props) {
 		<Box flexDirection="column" alignItems="center">
 			{fitsAngel
 				? art.map((line, row) => (
-						<Text key={`a${row}`} color={blend(theme.accent, theme.soft, row / Math.max(art.length - 1, 1))}>
+						<Text key={`a${row}`} color={blend(theme.primary, theme.accent, row / Math.max(art.length - 1, 1))}>
 							{line}
 						</Text>
 					))
@@ -46,16 +47,16 @@ export function Logo({theme, columns, size = 'full'}: Props) {
 			{fitsAngel ? <Text> </Text> : null}
 			{fitsName ? (
 				name.map((line, row) => (
-					<Text key={`n${row}`} bold color={blend(theme.soft, theme.accent, row / Math.max(name.length - 1, 1))}>
+					<Text key={`n${row}`} bold color={blend(theme.accent, theme.primary, row / Math.max(name.length - 1, 1))}>
 						{line}
 					</Text>
 				))
 			) : (
-				<Text bold color={theme.accent}>
+				<Text bold color={theme.primary}>
 					{NAME}
 				</Text>
 			)}
-			<Text color={theme.dim}>{TAGLINE}</Text>
+			<Text color={theme.muted}>{TAGLINE}</Text>
 		</Box>
 	);
 }

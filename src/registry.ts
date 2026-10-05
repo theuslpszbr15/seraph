@@ -15,19 +15,21 @@ export type ProviderSpec = {
 	envKey?: string;
 	/** Local servers need no key at all. */
 	keyless?: boolean;
+	/** How this provider's keys start, to warn about a key pasted into the wrong place. */
+	keyPrefix?: string;
 	defaultModel?: string;
 };
 
 /** Ready-made entries: pick one in /connect and paste the key. */
 export const PRESETS: ProviderSpec[] = [
 	{id: 'copilot', label: 'GitHub Copilot', kind: 'copilot', baseUrl: '', defaultModel: 'gpt-4.1'},
-	{id: 'openai', label: 'OpenAI', kind: 'openai', baseUrl: 'https://api.openai.com/v1', envKey: 'OPENAI_API_KEY', defaultModel: 'gpt-4.1'},
-	{id: 'anthropic', label: 'Anthropic', kind: 'anthropic', baseUrl: 'https://api.anthropic.com', envKey: 'ANTHROPIC_API_KEY', defaultModel: 'claude-sonnet-4-5'},
-	{id: 'openrouter', label: 'OpenRouter', kind: 'openai', baseUrl: 'https://openrouter.ai/api/v1', envKey: 'OPENROUTER_API_KEY'},
-	{id: 'groq', label: 'Groq', kind: 'openai', baseUrl: 'https://api.groq.com/openai/v1', envKey: 'GROQ_API_KEY'},
-	{id: 'nvidia', label: 'NVIDIA', kind: 'openai', baseUrl: 'https://integrate.api.nvidia.com/v1', envKey: 'NVIDIA_API_KEY'},
-	{id: 'deepseek', label: 'DeepSeek', kind: 'openai', baseUrl: 'https://api.deepseek.com/v1', envKey: 'DEEPSEEK_API_KEY'},
-	{id: 'gemini', label: 'Google Gemini', kind: 'openai', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', envKey: 'GEMINI_API_KEY'},
+	{id: 'openai', label: 'OpenAI', kind: 'openai', baseUrl: 'https://api.openai.com/v1', envKey: 'OPENAI_API_KEY', keyPrefix: 'sk-', defaultModel: 'gpt-4.1'},
+	{id: 'anthropic', label: 'Anthropic', kind: 'anthropic', baseUrl: 'https://api.anthropic.com', envKey: 'ANTHROPIC_API_KEY', keyPrefix: 'sk-ant-', defaultModel: 'claude-sonnet-4-5'},
+	{id: 'openrouter', label: 'OpenRouter', kind: 'openai', baseUrl: 'https://openrouter.ai/api/v1', envKey: 'OPENROUTER_API_KEY', keyPrefix: 'sk-or-'},
+	{id: 'groq', label: 'Groq', kind: 'openai', baseUrl: 'https://api.groq.com/openai/v1', envKey: 'GROQ_API_KEY', keyPrefix: 'gsk_'},
+	{id: 'nvidia', label: 'NVIDIA', kind: 'openai', baseUrl: 'https://integrate.api.nvidia.com/v1', envKey: 'NVIDIA_API_KEY', keyPrefix: 'nvapi-'},
+	{id: 'deepseek', label: 'DeepSeek', kind: 'openai', baseUrl: 'https://api.deepseek.com/v1', envKey: 'DEEPSEEK_API_KEY', keyPrefix: 'sk-'},
+	{id: 'gemini', label: 'Google Gemini', kind: 'openai', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', envKey: 'GEMINI_API_KEY', keyPrefix: 'AIza'},
 	{id: 'ollama', label: 'Ollama (local)', kind: 'openai', baseUrl: 'http://localhost:11434/v1', keyless: true},
 	{id: 'lmstudio', label: 'LM Studio (local)', kind: 'openai', baseUrl: 'http://localhost:1234/v1', keyless: true},
 	{id: 'custom', label: 'Outra API compatível com OpenAI', kind: 'openai', baseUrl: ''},
@@ -40,11 +42,29 @@ export type Config = {
 	theme: string;
 	/** Custom endpoints added by the user, on top of PRESETS. */
 	custom: ProviderSpec[];
+	/** Context window per `provider::model`, learned from /models. */
+	contexts: Record<string, number>;
+	version?: number;
 };
 
-export const DEFAULT_CONFIG: Config = {provider: '', model: '', mode: 'build', theme: 'celestial', custom: []};
+export const DEFAULT_CONFIG: Config = {provider: '', model: '', mode: 'build', theme: 'seraph', custom: [], contexts: {}};
 
-export const config = settingsStore<Config>('config.json', DEFAULT_CONFIG);
+const store = settingsStore<Config>('config.json', DEFAULT_CONFIG);
+
+export const config = {
+	get path() {
+		return store.path;
+	},
+	read(): Config {
+		const saved = store.read();
+		// Version 1 saved its default theme on every write, so nobody actually picked "celestial".
+		if ((saved.version ?? 1) < 2) return {...saved, theme: saved.theme === 'celestial' ? 'seraph' : saved.theme, version: 2};
+		return saved;
+	},
+	write(value: Config): void {
+		store.write({...value, version: 2});
+	},
+};
 const keys = secretStore<Record<string, string>>('keys.json');
 
 export function allSpecs(cfg: Config = config.read()): ProviderSpec[] {
@@ -56,8 +76,20 @@ export function findSpec(id: string, cfg: Config = config.read()): ProviderSpec 
 	return allSpecs(cfg).find(spec => spec.id === id);
 }
 
+/** API keys never contain whitespace; a paste that wrapped or carried a line break must not break the key. */
+export function cleanKey(key: string): string {
+	return key.replace(/\s+/g, '');
+}
+
 export function saveKey(id: string, key: string): void {
-	keys.write({...(keys.read() ?? {}), [id]: key.trim()});
+	keys.write({...(keys.read() ?? {}), [id]: cleanKey(key)});
+}
+
+/** A warning sentence when the key does not look like this provider's, otherwise undefined. */
+export function keyWarning(spec: ProviderSpec, key: string): string | undefined {
+	const clean = cleanKey(key);
+	if (!spec.keyPrefix || clean.startsWith(spec.keyPrefix)) return undefined;
+	return `Essa chave não parece de ${spec.label}: as chaves de lá começam com "${spec.keyPrefix}". Se der erro 401, cole de novo com /connect.`;
 }
 
 export function removeKey(id: string): void {
@@ -96,6 +128,7 @@ export function buildProvider(spec: ProviderSpec, fetchImpl: FetchLike = fetch):
 				};
 			},
 			fetchImpl,
+			{streamUsage: true},
 		);
 	}
 
@@ -106,7 +139,13 @@ export function buildProvider(spec: ProviderSpec, fetchImpl: FetchLike = fetch):
 			spec.kind === 'anthropic' ? (key ? {'x-api-key': key} : {}) : key ? {Authorization: `Bearer ${key}`} : {};
 		return {baseUrl: spec.baseUrl, headers};
 	};
-	return spec.kind === 'anthropic' ? anthropicProvider(spec.id, auth, fetchImpl) : openAiProvider(spec.id, auth, fetchImpl);
+	// Unknown servers may reject stream_options, so only the known presets ask for usage.
+	const preset = PRESETS.some(item => item.id === spec.id);
+	return spec.kind === 'anthropic' ? anthropicProvider(spec.id, auth, fetchImpl) : openAiProvider(spec.id, auth, fetchImpl, {streamUsage: preset});
+}
+
+export function contextFor(cfg: Config): number | undefined {
+	return cfg.contexts?.[`${cfg.provider}::${cfg.model}`];
 }
 
 /** Hides everything but the last four characters, for showing a key back to its owner. */

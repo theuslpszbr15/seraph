@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtempSync, readdirSync, readFileSync, rmSync} from 'node:fs';
+import {mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {after, before, test} from 'node:test';
@@ -13,7 +13,7 @@ import {
 	saveCopilotSession,
 	startDeviceFlow,
 } from '../src/providers/copilot.ts';
-import {allSpecs, config, findSpec, isConnected, maskKey, PRESETS, removeKey, resolveKey, saveKey} from '../src/registry.ts';
+import {allSpecs, config, findSpec, isConnected, keyWarning, maskKey, PRESETS, removeKey, resolveKey, saveKey} from '../src/registry.ts';
 import {deleteSession, exportMarkdown, listSessions, loadSession, newSession, saveSession, titleFrom} from '../src/sessions.ts';
 import {secretStore} from '../src/store.ts';
 
@@ -79,10 +79,28 @@ test('registro: NVIDIA aponta para o endpoint compatível e lê NVIDIA_API_KEY',
 	assert.equal(nvidia?.envKey, 'NVIDIA_API_KEY');
 });
 
+test('registro: chave colada com quebra de linha é limpa; formato errado gera aviso', () => {
+	const nvidia = findSpec('nvidia')!;
+	saveKey('nvidia', ' nvapi-abc\r\n def ');
+	assert.equal(resolveKey({...nvidia, envKey: 'SERAPH_TESTE_SEM_VARIAVEL'}), 'nvapi-abcdef');
+	removeKey('nvidia');
+	assert.equal(keyWarning(nvidia, 'nvapi-xyz'), undefined);
+	assert.match(keyWarning(nvidia, 'sk-proj-xyz') ?? '', /começam com "nvapi-"/);
+	assert.equal(keyWarning(findSpec('ollama')!, 'qualquer'), undefined);
+});
+
 test('registro: configuração padrão vem completa e persiste', () => {
-	assert.equal(config.read().theme, 'celestial');
+	assert.equal(config.read().theme, 'seraph');
 	config.write({...config.read(), model: 'gpt-x'});
 	assert.equal(config.read().model, 'gpt-x');
+});
+
+test('registro: o tema celestial salvo pela versão 1 vira o novo padrão; uma escolha feita agora fica', () => {
+	writeFileSync(join(home, 'config.json'), JSON.stringify({provider: '', model: '', mode: 'build', theme: 'celestial', custom: []}));
+	assert.equal(config.read().theme, 'seraph');
+	assert.deepEqual(config.read().contexts, {});
+	config.write({...config.read(), theme: 'celestial'});
+	assert.equal(config.read().theme, 'celestial');
 });
 
 test('sessões: salva, lista, carrega, exporta e rejeita id com caminho', () => {

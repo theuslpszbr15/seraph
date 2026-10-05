@@ -32,10 +32,12 @@ export type ChatRequest = {
 
 export type ChatResult = {text: string; toolCalls: ToolCall[]; usage?: Usage};
 
+export type ModelInfo = {id: string; context?: number};
+
 export interface Provider {
 	readonly id: string;
 	chat(request: ChatRequest): Promise<ChatResult>;
-	listModels(signal: AbortSignal): Promise<string[]>;
+	listModels(signal: AbortSignal): Promise<ModelInfo[]>;
 }
 
 /** Resolved on every call so short-lived tokens (Copilot) can refresh themselves. */

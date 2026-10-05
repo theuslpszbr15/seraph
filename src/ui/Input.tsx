@@ -1,5 +1,6 @@
 import {Text, useInput} from 'ink';
 import React, {useReducer, useRef} from 'react';
+import {isMouse} from './terminal.js';
 
 type Props = {
 	value: string;
@@ -27,7 +28,7 @@ export function Input({value, onChange, onSubmit, placeholder, mask, focus = tru
 	// An outside change (clearing after submit) wins over what was typed.
 	if (value !== text.current) {
 		text.current = value;
-		cursor.current = value.length === 0 ? 0 : Math.min(cursor.current, value.length);
+		cursor.current = value.length;
 	}
 
 	const commit = (next: string, position: number) => {
@@ -61,7 +62,15 @@ export function Input({value, onChange, onSubmit, placeholder, mask, focus = tru
 				else return;
 				return repaint();
 			}
-			if (key.meta || key.tab || key.escape || key.upArrow || key.downArrow || key.pageUp || key.pageDown || !input) return;
+			if (key.meta || key.tab || key.escape || key.upArrow || key.downArrow || key.pageUp || key.pageDown || !input || isMouse(input)) return;
+
+			// Text and Enter can arrive in one chunk (fast typing, remote shells): that is a submit, not a line break.
+			if (input.length > 1 && input.endsWith('\r') && !input.slice(0, -1).includes('\r')) {
+				const typed = cleanPaste(input.slice(0, -1));
+				const next = current.slice(0, at) + typed + current.slice(at);
+				commit(next, at + typed.length);
+				return onSubmit(next);
+			}
 
 			const pasted = cleanPaste(input);
 			commit(current.slice(0, at) + pasted + current.slice(at), at + pasted.length);
