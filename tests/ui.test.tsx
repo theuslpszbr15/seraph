@@ -6,6 +6,8 @@ import {afterEach, beforeEach, test} from 'node:test';
 import {render} from 'ink-testing-library';
 import React from 'react';
 import {App} from '../src/App.tsx';
+import {themeById} from '../src/themes.ts';
+import {Logo} from '../src/ui/Logo.tsx';
 
 let home = '';
 const previous = process.env['SERAPH_HOME'];
@@ -25,16 +27,25 @@ afterEach(() => {
 const settle = () => new Promise(resolve => setTimeout(resolve, 60));
 const PROJECT = 'C:\\projeto';
 
-test('tela inicial: anjo, nome, prompt e dicas', async () => {
+test('tela inicial: nome, prompt e dicas; sem o anjo quando a janela é baixa', async () => {
 	const app = render(<App cwd={PROJECT} />);
 	await settle();
 	const frame = app.lastFrame() ?? '';
 	assert.ok(frame.includes('███████╗'), 'wordmark SERAPH ausente');
-	assert.ok(frame.includes('▄▄▀▀▀'), 'anjo ausente');
+	assert.ok(!frame.includes('▄▄▀▀▀'), 'o anjo não cabe em 30 linhas');
+	assert.ok(frame.split('\n').length < 30, 'a tela inicial precisa caber na janela');
 	assert.match(frame, /Construir/);
 	assert.match(frame, /nenhum modelo/);
 	assert.match(frame, /ctrl\+p/);
 	assert.ok(frame.includes(PROJECT));
+	app.unmount();
+});
+
+test('logo completo: o anjo aparece quando há altura', () => {
+	const app = render(<Logo theme={themeById('celestial')} columns={100} size="full" />);
+	const frame = app.lastFrame() ?? '';
+	assert.ok(frame.includes('▄▄▀▀▀'), 'anjo ausente');
+	assert.ok(frame.includes('███████╗'));
 	app.unmount();
 });
 

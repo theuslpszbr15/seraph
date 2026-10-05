@@ -16,12 +16,22 @@ export function blend(from: string, to: string, amount: number): string {
 	return `#${part(0)}${part(1)}${part(2)}`;
 }
 
-type Props = {theme: Theme; columns: number};
+type Props = {theme: Theme; columns: number; size?: 'full' | 'name' | 'mini'};
 
-export function Logo({theme, columns}: Props) {
+export function Logo({theme, columns, size = 'full'}: Props) {
+	if (size === 'mini') {
+		return (
+			<Text>
+				<Text bold color={theme.accent}>
+					✦ {NAME}
+				</Text>
+				<Text color={theme.dim}> · {TAGLINE}</Text>
+			</Text>
+		);
+	}
 	const art = angel();
 	const name = wordmark();
-	const fitsAngel = columns >= artWidth(art) + 2;
+	const fitsAngel = size === 'full' && columns >= artWidth(art) + 2;
 	const fitsName = columns >= artWidth(name) + 2;
 
 	return (

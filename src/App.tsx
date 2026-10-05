@@ -1,7 +1,7 @@
 import {mkdirSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {Box, Static, Text, useApp, useInput, useStdout} from 'ink';
-import React, {useCallback, useRef, useState} from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {runTurn, type AgentEvent} from './agent.js';
 import {findCommand, parseCommand, suggest} from './commands.js';
 import {
@@ -29,6 +29,7 @@ import {THEMES, themeById} from './themes.js';
 import type {Message} from './types.js';
 import {BlockView, type Block, type NewBlock} from './ui/Blocks.js';
 import {Input} from './ui/Input.js';
+import {formatElapsed, logoSizeFor, tailFit} from './ui/fit.js';
 import {Logo} from './ui/Logo.js';
 import {Prompt} from './ui/Prompt.js';
 import {Select, type Choice} from './ui/Select.js';
@@ -68,6 +69,7 @@ export function App({cwd}: {cwd: string}) {
 	const {exit} = useApp();
 	const {stdout} = useStdout();
 	const columns = stdout.columns ?? 80;
+	const rows = stdout.rows ?? 30;
 
 	const [cfg, setCfg] = useState<Config>(() => config.read());
 	const [blocks, setBlocks] = useState<Block[]>([]);
@@ -81,6 +83,14 @@ export function App({cwd}: {cwd: string}) {
 	const [tokens, setTokens] = useState({input: 0, output: 0});
 	const [draft, setDraft] = useState('');
 	const [exitArmed, setExitArmed] = useState(false);
+	const [elapsed, setElapsed] = useState(0);
+
+	// Reasoning models can take a minute to start; a ticking clock tells the user it is not frozen.
+	useEffect(() => {
+		if (!busy) return setElapsed(0);
+		const timer = setInterval(() => setElapsed(seconds => seconds + 1), 1000);
+		return () => clearInterval(timer);
+	}, [busy]);
 
 	const theme = themeById(cfg.theme);
 	const history = useRef<Message[]>([]);
@@ -600,9 +610,9 @@ export function App({cwd}: {cwd: string}) {
 			</Static>
 
 			{home ? (
-				<Box flexDirection="column" alignItems="center" marginTop={1}>
-					<Logo theme={theme} columns={columns} />
-					<Box marginTop={1} flexDirection="column" width={width}>
+				<Box flexDirection="column" alignItems="center" marginTop={rows >= 26 ? 1 : 0}>
+					<Logo theme={theme} columns={columns} size={logoSizeFor(rows)} />
+					<Box marginTop={rows >= 26 ? 1 : 0} flexDirection="column" width={width}>
 						{overlay ? (
 							renderOverlay()
 						) : (
@@ -629,8 +639,17 @@ export function App({cwd}: {cwd: string}) {
 						</Box>
 					) : null}
 					{live.text ? (
-						<Box marginTop={1} marginLeft={2}>
-							<Text color={theme.text}>{live.text}</Text>
+						<Box marginTop={1} marginLeft={2} flexDirection="column">
+							{(() => {
+								// Ink cannot erase lines that scrolled out of view, so only the tail is drawn live.
+								const fit = tailFit(live.text, columns - 4, Math.max(rows - 12, 4));
+								return (
+									<>
+										{fit.hidden > 0 ? <Text color={theme.dim}>… {fit.hidden} linhas acima (aparecem completas ao terminar)</Text> : null}
+										<Text color={theme.text}>{fit.text}</Text>
+									</>
+								);
+							})()}
 						</Box>
 					) : null}
 					{live.tools.map(tool => (
@@ -640,7 +659,10 @@ export function App({cwd}: {cwd: string}) {
 					))}
 					{busy && !live.text && live.tools.length === 0 ? (
 						<Box marginLeft={2}>
-							<Text color={theme.dim}>pensando…</Text>
+							<Text color={theme.dim}>
+								{live.thinking ? 'raciocinando' : 'aguardando o modelo'}… {formatElapsed(elapsed)}
+								{elapsed >= 20 ? ' (modelos de raciocínio podem levar um tempo; esc interrompe)' : ''}
+							</Text>
 						</Box>
 					) : null}
 					<Box marginTop={1} flexDirection="column">
