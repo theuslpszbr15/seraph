@@ -166,6 +166,8 @@ type ApprovalProps = {theme: Theme; name: string; summary: string; onAnswer: (al
 
 export function ApprovalBox({theme, name, summary, onAnswer}: ApprovalProps) {
 	useInput((input, key) => {
+		// A paste must never answer for the user.
+		if (input.length > 1) return;
 		if (input === 'A') return onAnswer(true, 'all');
 		const letter = input.toLowerCase();
 		if (letter === 's' || letter === 'y' || key.return) onAnswer(true);

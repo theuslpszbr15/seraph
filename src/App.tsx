@@ -5,6 +5,7 @@ import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {runTurn, type AgentEvent} from './agent.js';
 import {COMMANDS, findCommand, parseCommand, suggest, type Command} from './commands.js';
 import {applyArguments, loadCustomCommands, promptHistory} from './customCommands.js';
+import {writeClipboard} from './clipboard.js';
 import {completeMention, expandMentions, gitBranch, listProjectFiles, matchFiles, mentionQuery} from './files.js';
 import {exchangeCopilotToken, forgetCopilot, pollForGithubToken, saveCopilotSession, startDeviceFlow, type DeviceCode} from './providers/copilot.js';
 import {
@@ -60,14 +61,17 @@ type UndoEntry = {turn: number; historyLength: number; prompt: string; files: Ma
 const MAX_BLOCKS = 300;
 const SIDEBAR_MIN_COLUMNS = 110;
 const COMPACT_AT = 0.8;
+const RUNS_WHILE_BUSY = new Set(['themes', 'help', 'thinking', 'details', 'auto', 'export', 'copy', 'exit']);
 
 const SHORTCUTS: [string, string][] = [
-	['enter', 'enviar'],
+	['enter', 'enviar (durante uma resposta, entra na fila)'],
 	['ctrl+j', 'nova linha'],
+	['ctrl+v', 'colar'],
 	['tab', 'alternar Construir / Planejar'],
 	['ctrl+p', 'paleta de comandos'],
 	['↑ ↓', 'mensagens anteriores'],
 	['PgUp PgDn', 'rolar a conversa (ou a roda do mouse)'],
+	['shift+arrastar', 'selecionar texto para copiar'],
 	['@arquivo', 'anexar um arquivo do projeto'],
 	['!comando', 'rodar direto no terminal'],
 	['esc', 'interromper o agente'],
@@ -138,6 +142,7 @@ export function App({cwd, initialSession}: Props) {
 	const [changed, setChanged] = useState<string[]>([]);
 	const [tip] = useState(() => TIPS[Math.floor(Math.random() * TIPS.length)] ?? '');
 	const [customs, setCustoms] = useState(() => loadCustomCommands(cwd));
+	const [queued, setQueued] = useState<string[]>([]);
 
 	const theme = themeById(preview ?? cfg.theme);
 	const history = useRef<Message[]>([]);
@@ -158,6 +163,7 @@ export function App({cwd, initialSession}: Props) {
 	const viewport = useRef<DOMElement>(null);
 	const content = useRef<DOMElement>(null);
 	const metrics = useRef({viewport: 0, content: 0});
+	const quitting = useRef(false);
 	const showThinkingRef = useRef(showThinking);
 	showThinkingRef.current = showThinking;
 
@@ -261,9 +267,28 @@ export function App({cwd, initialSession}: Props) {
 		if (history.current.length > 0) saveSession({...session.current, messages: history.current});
 	};
 
-	const quit = () => {
+	/** What was already streamed when a turn stops early, so the next message keeps the context. */
+	const partialAnswer = (): Message | undefined => {
+		const text = liveRef.current.text.trim();
+		return text ? {role: 'assistant', content: `${text}\n\n[resposta interrompida]`} : undefined;
+	};
+
+	/** Stops the turn; a pending approval is answered "no" so the agent can finish instead of waiting forever. */
+	const interrupt = () => {
 		abort.current?.abort();
+		if (approval.current) {
+			approval.current(false);
+			approval.current = null;
+			setOverlay(null);
+		}
+	};
+
+	const quit = () => {
+		quitting.current = true;
+		const partial = partialAnswer();
+		interrupt();
 		loginAbort.current?.abort();
+		if (partial) history.current = [...history.current, partial];
 		save();
 		exit(history.current.length > 0 ? {sessionId: session.current.id} : {});
 	};
@@ -299,6 +324,7 @@ export function App({cwd, initialSession}: Props) {
 		setOverlay({kind: 'copilot', device: null});
 		try {
 			const device = await startDeviceFlow('github.com', controller.signal);
+			void writeClipboard(device.userCode);
 			setOverlay({kind: 'copilot', device});
 			const githubToken = await pollForGithubToken('github.com', device, controller.signal);
 			saveCopilotSession(await exchangeCopilotToken(githubToken, undefined, controller.signal));
@@ -404,6 +430,9 @@ export function App({cwd, initialSession}: Props) {
 		setScroll(0);
 
 		const userMessage: Message = {role: 'user', content: expanded};
+		// Saved before the model answers: an interruption or a closed window keeps what was asked.
+		history.current = [...history.current, userMessage];
+		save();
 		const controller = new AbortController();
 		abort.current = controller;
 		started.current = Date.now();
@@ -411,7 +440,7 @@ export function App({cwd, initialSession}: Props) {
 		patchLive(EMPTY_LIVE);
 
 		try {
-			const added = await runTurn({
+			await runTurn({
 				provider: buildProvider(spec),
 				model: cfg.model,
 				mode: cfg.mode,
@@ -419,6 +448,10 @@ export function App({cwd, initialSession}: Props) {
 				root: cwd,
 				signal: controller.signal,
 				onEvent,
+				onMessage: message => {
+					history.current = [...history.current, message];
+					save();
+				},
 				onBeforeWrite: path => {
 					if (!entry.files.has(path)) entry.files.set(path, existsSync(path) ? readFileSync(path, 'utf8') : null);
 					const shownPath = relativeTo(cwd, path);
@@ -432,9 +465,9 @@ export function App({cwd, initialSession}: Props) {
 								setOverlay({kind: 'approval', name: request.name, summary: request.summary});
 							}),
 			});
-			history.current = [...history.current, userMessage, ...added];
 		} catch (error) {
-			history.current = [...history.current, userMessage];
+			const partial = quitting.current ? undefined : partialAnswer();
+			if (partial) history.current = [...history.current, partial];
 			if (!controller.signal.aborted) notice(error instanceof Error ? error.message : String(error), 'error');
 		} finally {
 			flush();
@@ -485,9 +518,16 @@ export function App({cwd, initialSession}: Props) {
 			case 'sessions':
 				return setOverlay({kind: 'sessions'});
 			case 'themes':
+				allThemes(true);
 				return setOverlay({kind: 'themes'});
 			case 'help':
 				return setOverlay({kind: 'help'});
+			case 'copy': {
+				const last = [...history.current].reverse().find(message => message.role === 'assistant' && message.content.trim());
+				if (!last) return notice('Ainda não há resposta para copiar.');
+				void writeClipboard(last.content).then(ok => notice(ok ? 'Última resposta copiada.' : 'Não consegui acessar a área de transferência.', ok ? 'ok' : 'error'));
+				return;
+			}
 			case 'thinking':
 				setShowThinking(current => !current);
 				return notice(`Raciocínio ${showThinking ? 'oculto' : 'visível'}.`);
@@ -519,6 +559,12 @@ export function App({cwd, initialSession}: Props) {
 		}
 	};
 
+	const dispatch = (text: string) => {
+		if (text.startsWith('/')) return runCommand(text);
+		if (text.startsWith('!')) return void runShell(text.slice(1).trim());
+		void ask(text);
+	};
+
 	const send = (raw: string) => {
 		if (mentionItems.length > 0) {
 			const file = mentionItems[active];
@@ -526,19 +572,26 @@ export function App({cwd, initialSession}: Props) {
 		}
 		const text = raw.trim();
 		if (!text) return;
-		if (busy) return notice('Ainda trabalhando: espere terminar ou aperte esc.');
 		promptHistory.push(text);
 		historyIndex.current = -1;
 		setValue('');
+		let resolved = text;
 		if (text.startsWith('/')) {
-			const typed = parseCommand(text).name;
 			const picked = slashItems[active];
-			if (!findCommand(typed, customCommands) && picked) return runCommand(`/${picked.name}`);
-			return runCommand(text);
+			if (!findCommand(parseCommand(text).name, customCommands) && picked) resolved = `/${picked.name}`;
 		}
-		if (text.startsWith('!')) return void runShell(text.slice(1).trim());
-		void ask(text);
+		const command = resolved.startsWith('/') ? findCommand(parseCommand(resolved).name, customCommands)?.name : undefined;
+		// Screen-only commands run at once; anything that talks to the model or changes the conversation waits its turn.
+		if (busy && !(command && RUNS_WHILE_BUSY.has(command))) return setQueued(current => [...current, resolved]);
+		dispatch(resolved);
 	};
+
+	useEffect(() => {
+		if (busy || queued.length === 0) return;
+		const [next, ...rest] = queued;
+		setQueued(rest);
+		if (next) dispatch(next);
+	}, [busy, queued]);
 
 	const answerApproval = (answer: boolean, scope?: 'tool' | 'all') => {
 		const current = overlay;
@@ -580,7 +633,7 @@ export function App({cwd, initialSession}: Props) {
 			return;
 		}
 		if (key.ctrl && input === 'c') {
-			if (busy) return abort.current?.abort();
+			if (busy) return interrupt();
 			if (overlay && overlay.kind !== 'approval') return closeOverlay();
 			if (value) return setValue('');
 			return quit();
@@ -589,7 +642,7 @@ export function App({cwd, initialSession}: Props) {
 		if (overlay?.kind === 'approval') return;
 		if (key.escape) {
 			if (overlay) return closeOverlay();
-			if (busy) abort.current?.abort();
+			if (busy) interrupt();
 			return;
 		}
 		if (overlay) return;
@@ -613,7 +666,8 @@ export function App({cwd, initialSession}: Props) {
 
 	const renderOverlay = () => {
 		if (!overlay) return null;
-		const dialog = {theme, onCancel: closeOverlay};
+		// Dialogs must fit under the compact logo and above the footer, whatever the window height.
+		const dialog = {theme, onCancel: closeOverlay, rows: Math.max(3, rows - 16)};
 		switch (overlay.kind) {
 			case 'palette':
 				return (
@@ -727,31 +781,19 @@ export function App({cwd, initialSession}: Props) {
 				);
 			case 'help':
 				return (
-					<Box flexDirection="column" backgroundColor={theme.panel} paddingX={2} paddingY={1}>
-						<Text bold color={theme.text}>
-							Atalhos
-						</Text>
-						{SHORTCUTS.map(([keys, what]) => (
-							<Text key={keys} color={theme.muted}>
-								<Text color={theme.primary}>{keys.padEnd(14)}</Text>
-								{what}
-							</Text>
-						))}
-						<Box marginTop={1}>
-							<Text bold color={theme.text}>
-								Comandos
-							</Text>
-						</Box>
-						{suggest('/', customCommands).map(command => (
-							<Text key={command.name} color={theme.muted}>
-								<Text color={theme.primary}>{`/${command.name}`.padEnd(14)}</Text>
-								{command.hint}
-							</Text>
-						))}
-						<Box marginTop={1}>
-							<Text color={theme.muted}>esc fecha</Text>
-						</Box>
-					</Box>
+					<Select
+						{...dialog}
+						title="Ajuda"
+						choices={[
+							...SHORTCUTS.map(([keys, what], index) => ({id: `#${index}`, label: keys, hint: what, group: 'Atalhos'})),
+							...suggest('/', customCommands).map(command => ({id: command.name, label: `/${command.name}`, hint: command.hint, group: 'Comandos'})),
+						]}
+						onPick={choice => {
+							if (choice.id.startsWith('#')) return;
+							setOverlay(null);
+							runCommand(`/${choice.id}`);
+						}}
+					/>
 				);
 			case 'key':
 				return (
@@ -837,6 +879,7 @@ export function App({cwd, initialSession}: Props) {
 									<Text bold color={theme.primary}>
 										{overlay.device.userCode}
 									</Text>
+									<Text color={theme.muted}> (já copiado: é só colar)</Text>
 								</Text>
 								<Text color={theme.muted}>Aguardando você autorizar… (esc cancela)</Text>
 							</>
@@ -871,10 +914,10 @@ export function App({cwd, initialSession}: Props) {
 	const runningTool = live.tools.at(-1)?.summary;
 
 	return (
-		<Box width={columns} height={Math.max(rows - 1, 8)} flexDirection="column" {...background}>
+		<Box width={columns} height={Math.max(rows - 1, 8)} flexDirection="column" overflow="hidden" {...background}>
 			{home ? (
 				<Box flexGrow={1} flexDirection="column" alignItems="center" justifyContent="center">
-					<Logo theme={theme} columns={columns} size={logoSizeFor(rows)} />
+					<Logo theme={theme} columns={columns} size={overlay ? 'mini' : logoSizeFor(rows)} />
 					<Box marginTop={1} width={promptWidth} flexDirection="column">
 						{overlay ? (
 							renderOverlay()
@@ -927,6 +970,13 @@ export function App({cwd, initialSession}: Props) {
 							</Text>
 						) : null}
 						{busy ? <StatusLine theme={theme} tick={tick} seconds={Math.floor((Date.now() - started.current) / 1000)} thinking={showThinking ? '' : live.thinking} tool={runningTool} /> : null}
+						{queued.map((item, index) => (
+							<Box key={`${index}-${item}`} paddingLeft={3}>
+								<Text color={theme.muted} wrap="truncate-end">
+									↳ na fila: {item.split('\n')[0]}
+								</Text>
+							</Box>
+						))}
 						<Box marginTop={1} flexDirection="column">
 							{overlay ? (
 								renderOverlay()

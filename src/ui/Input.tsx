@@ -1,5 +1,6 @@
 import {Text, useInput} from 'ink';
 import React, {useReducer, useRef} from 'react';
+import {readClipboard} from '../clipboard.js';
 import {isMouse} from './terminal.js';
 
 type Props = {
@@ -16,8 +17,16 @@ type Props = {
 
 /** Pasted text arrives as one chunk, so a line ending inside it must not submit. */
 export function cleanPaste(input: string): string {
-	return input.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '').replace(/\r\n?/g, '\n');
+	return input
+		.replace(/\u001b?\[20[01]~/g, '')
+		.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '')
+		.replace(/\r\n?/g, '\n')
+		.replace(/\t/g, '  ');
 }
+
+/** Bracketed paste markers, sent by the terminal around pasted text (ESC already stripped by Ink). */
+export const PASTE_START = '[200~';
+export const PASTE_END = '[201~';
 
 export function Input({value, onChange, onSubmit, placeholder, mask, focus = true, color, dim = 'gray'}: Props) {
 	// Refs are the source of truth between renders, so two fast keystrokes never read stale text.
@@ -38,11 +47,56 @@ export function Input({value, onChange, onSubmit, placeholder, mask, focus = tru
 		repaint();
 	};
 
+	const insert = (raw: string) => {
+		const pasted = cleanPaste(raw);
+		const current = text.current;
+		const at = cursor.current;
+		commit(current.slice(0, at) + pasted + current.slice(at), at + pasted.length);
+	};
+
+	const pasting = useRef(false);
+
 	useInput(
 		(input, key) => {
 			const current = text.current;
 			const at = cursor.current;
+
+			// Inside a bracketed paste every key is text: Enter is a line break, never a submit.
+			if (input === PASTE_START) {
+				pasting.current = true;
+				return;
+			}
+			if (input === PASTE_END) {
+				pasting.current = false;
+				if (cursor.current === text.current.length && /\n+$/.test(text.current)) {
+					const trimmed = text.current.replace(/\n+$/, '');
+					commit(trimmed, trimmed.length);
+				}
+				return;
+			}
+			if (pasting.current) {
+				if (key.return) insert('\n');
+				else if (key.tab) insert('  ');
+				else if (input) insert(input);
+				return;
+			}
+
+			// Terminals that do not paste on ctrl+v send the raw key instead.
+			if (key.ctrl && input === 'v') {
+				void readClipboard().then(clip => {
+					if (clip) insert(clip.replace(/\r?\n$/, ''));
+				});
+				return;
+			}
 			if (key.return) return onSubmit(current);
+			if (key.home) {
+				cursor.current = 0;
+				return repaint();
+			}
+			if (key.end) {
+				cursor.current = current.length;
+				return repaint();
+			}
 			if (key.leftArrow) {
 				cursor.current = Math.max(at - 1, 0);
 				return repaint();
@@ -59,7 +113,10 @@ export function Input({value, onChange, onSubmit, placeholder, mask, focus = tru
 				if (input === 'a') cursor.current = 0;
 				else if (input === 'e') cursor.current = current.length;
 				else if (input === 'u') return commit(current.slice(at), 0);
-				else return;
+				else if (input === 'w') {
+					const start = current.slice(0, at).replace(/\S+\s*$/, '').length;
+					return commit(current.slice(0, start) + current.slice(at), start);
+				} else return;
 				return repaint();
 			}
 			if (key.meta || key.tab || key.escape || key.upArrow || key.downArrow || key.pageUp || key.pageDown || !input || isMouse(input)) return;
@@ -72,8 +129,7 @@ export function Input({value, onChange, onSubmit, placeholder, mask, focus = tru
 				return onSubmit(next);
 			}
 
-			const pasted = cleanPaste(input);
-			commit(current.slice(0, at) + pasted + current.slice(at), at + pasted.length);
+			insert(input);
 		},
 		{isActive: focus},
 	);

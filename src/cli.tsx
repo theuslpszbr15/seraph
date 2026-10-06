@@ -18,8 +18,9 @@ const HELP = `seraph [pasta] [opções]
   Dentro dele: /connect conecta uma API ou o GitHub Copilot, /help mostra os atalhos.`;
 
 // Alternate screen (like OpenCode): the shell's history stays untouched underneath and comes back on exit.
-const ENTER = '\u001b[?1049h\u001b[2J\u001b[H\u001b[?1000h\u001b[?1006h';
-const LEAVE = '\u001b[?1000l\u001b[?1006l\u001b[?1049l\u001b[?25h';
+// Mouse reports drive scrolling; bracketed paste lets a multi-line paste arrive as text, not as Enter presses.
+const ENTER = '\u001b[?1049h\u001b[2J\u001b[H\u001b[?1000h\u001b[?1006h\u001b[?2004h';
+const LEAVE = '\u001b[?2004l\u001b[?1000l\u001b[?1006l\u001b[?1049l\u001b[?25h';
 
 const rgb = (hex: string) => `\u001b[38;2;${Number.parseInt(hex.slice(1, 3), 16)};${Number.parseInt(hex.slice(3, 5), 16)};${Number.parseInt(hex.slice(5, 7), 16)}m`;
 const RESET = '\u001b[0m';

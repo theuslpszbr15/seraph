@@ -39,7 +39,7 @@ export function Select({title, choices, theme, onPick, onCancel, onHighlight, on
 	}, [current?.id]);
 
 	useInput((input, key) => {
-		if (isMouse(input)) return;
+		if (isMouse(input) || input === '[200~' || input === '[201~') return;
 		if (key.escape) return onCancel();
 		if (key.return) {
 			if (current) onPick(current);
@@ -57,7 +57,13 @@ export function Select({title, choices, theme, onPick, onCancel, onHighlight, on
 			return setIndex(0);
 		}
 		if (input && !key.ctrl && !key.meta && !key.tab) {
-			setQuery(query + input.replace(/[\r\n]/g, ''));
+			const typed = query + input.replace(/[\r\n]/g, '');
+			// Text and Enter in one chunk: filter, then pick the first match.
+			if (input.length > 1 && input.endsWith('\r')) {
+				const first = filterChoices(choices, typed)[0];
+				if (first) return onPick(first);
+			}
+			setQuery(typed);
 			setIndex(0);
 		}
 	});

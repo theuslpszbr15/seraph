@@ -55,13 +55,15 @@ Também dá para usar variáveis de ambiente, que têm prioridade sobre a chave 
 
 | Tecla | Ação |
 | --- | --- |
-| `enter` / `ctrl+j` | envia / nova linha |
+| `enter` / `ctrl+j` | envia / nova linha. Durante uma resposta, a mensagem entra na fila |
+| `ctrl+v` | cola (texto com várias linhas fica no campo, não é enviado) |
 | `tab` | alterna **Construir** (edita e roda) e **Planejar** (só lê); completa `/comando` e `@arquivo` |
 | `ctrl+p` | paleta de comandos |
 | `↑` `↓` | mensagens anteriores |
 | `PgUp` `PgDn`, roda do mouse | rola a conversa; `End` volta ao fim |
 | `esc` | interrompe o agente |
 | `ctrl+c` | limpa o campo; vazio, sai. Ou clique em **✕ sair** no rodapé |
+| `shift`+arrastar | seleciona texto para copiar (o mouse rola a conversa) |
 
 No campo de mensagem:
 
@@ -69,7 +71,9 @@ No campo de mensagem:
 - `!comando` roda direto no terminal e a saída entra no contexto da conversa.
 
 Comandos: `/connect` `/models` `/sessions` `/new` `/undo` `/init` `/auto` `/themes` `/thinking`
-`/details` `/compact` `/export` `/disconnect` `/help` `/exit`.
+`/details` `/compact` `/export` `/copy` `/disconnect` `/help` `/exit`.
+
+- `/copy` copia a última resposta para a área de transferência.
 
 - `/undo` desfaz a última resposta **e** devolve os arquivos que ela mudou ao estado anterior.
 - `/init` pede ao agente um `AGENTS.md` para o projeto.

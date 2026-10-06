@@ -29,6 +29,7 @@ export type TurnOptions = {
 	onEvent: (event: AgentEvent) => void;
 	/** Called with the absolute path right before write_file or edit_file touches it. */
 	onBeforeWrite?: (path: string) => void;
+	onMessage?: (message: Message) => void;
 };
 
 export function systemPrompt(mode: AgentMode, root: string): string {
@@ -105,9 +106,16 @@ async function execute(call: ToolCall, options: TurnOptions): Promise<string> {
 	}
 }
 
-/** Returns only the messages this turn added, so the caller decides how to store them. */
+/**
+ * `history` must already end with the user's new message. Returns the messages this turn added;
+ * `onMessage` sees each one as it is added, so progress survives an interruption.
+ */
 export async function runTurn(options: TurnOptions): Promise<Message[]> {
 	const added: Message[] = [];
+	const record = (message: Message) => {
+		added.push(message);
+		options.onMessage?.(message);
+	};
 	const tools = toolsFor(options.mode).map(({name, description, parameters}) => ({name, description, parameters}));
 
 	for (let step = 0; step < MAX_STEPS; step += 1) {
@@ -123,19 +131,20 @@ export async function runTurn(options: TurnOptions): Promise<Message[]> {
 		});
 		if (result.usage) options.onEvent({type: 'usage', usage: result.usage});
 
-		added.push({role: 'assistant', content: result.text, ...(result.toolCalls.length > 0 ? {toolCalls: result.toolCalls} : {})});
+		record({role: 'assistant', content: result.text, ...(result.toolCalls.length > 0 ? {toolCalls: result.toolCalls} : {})});
 		if (result.toolCalls.length === 0) return added;
 
+		// Every tool call needs an answer, or the next request is rejected by the API.
 		for (const call of result.toolCalls) {
-			const output = await execute(call, options);
-			added.push({role: 'tool', content: output, toolCallId: call.id, name: call.name});
+			const output = options.signal.aborted ? 'Cancelado: o usuário interrompeu antes desta ação.' : await execute(call, options);
+			record({role: 'tool', content: output, toolCallId: call.id, name: call.name});
 		}
 	}
 
 	if (!options.signal.aborted) {
 		const note = `Parei após ${MAX_STEPS} passos. Diga "continue" para seguir.`;
 		options.onEvent({type: 'text', text: `\n${note}`});
-		added.push({role: 'assistant', content: note});
+		record({role: 'assistant', content: note});
 	}
 	return added;
 }

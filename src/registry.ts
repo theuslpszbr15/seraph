@@ -100,8 +100,9 @@ export function removeKey(id: string): void {
 
 /** Environment first, so a CI or a one-off shell can override without touching disk. */
 export function resolveKey(spec: ProviderSpec): string | undefined {
-	if (spec.envKey && process.env[spec.envKey]) return process.env[spec.envKey];
-	return keys.read()?.[spec.id];
+	if (spec.envKey && process.env[spec.envKey]) return cleanKey(process.env[spec.envKey] ?? '');
+	const saved = keys.read()?.[spec.id];
+	return saved === undefined ? undefined : cleanKey(saved);
 }
 
 export function isConnected(spec: ProviderSpec): boolean {

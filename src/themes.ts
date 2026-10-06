@@ -109,9 +109,15 @@ export function customThemes(home = seraphHome()): Theme[] {
 	return found;
 }
 
-export function allThemes(): Theme[] {
-	const custom = customThemes();
-	return [...THEMES.filter(item => !custom.some(mine => mine.id === item.id)), ...custom];
+let cached: Theme[] | undefined;
+
+/** Builtins plus the user's files; the folder is read again only when `reload` is set. */
+export function allThemes(reload = false): Theme[] {
+	if (!cached || reload) {
+		const custom = customThemes();
+		cached = [...THEMES.filter(item => !custom.some(mine => mine.id === item.id)), ...custom];
+	}
+	return cached;
 }
 
 export function themeById(id: string): Theme {

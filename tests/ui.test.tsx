@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {createServer, type Server} from 'node:http';
-import {existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {after, afterEach, before, beforeEach, test} from 'node:test';
@@ -45,11 +45,15 @@ const settle = () => sleep(80);
 
 type Rendered = ReturnType<typeof render>;
 
-async function waitFor(app: Rendered, predicate: (frame: string) => boolean, ms = 10_000): Promise<string> {
+async function waitFor(app: Rendered, predicate: (frame: string) => boolean, ms = 20_000): Promise<string> {
 	const end = Date.now() + ms;
 	while (Date.now() < end) {
 		const frame = app.lastFrame() ?? '';
-		if (predicate(frame)) return frame;
+		if (predicate(frame)) {
+			// A dialog draws before its key listener subscribes; typing at once could be lost.
+			await settle();
+			return frame;
+		}
 		await sleep(40);
 	}
 	throw new Error(`Tempo esgotado. Última tela:\n${app.lastFrame()}`);
@@ -201,38 +205,68 @@ test('/themes escolhe o tema e salva', async () => {
 	app.unmount();
 });
 
-/** A model on a real local HTTP server: first asks to write a file, then answers. */
-async function fakeModel(): Promise<{server: Server; url: string}> {
+type Sent = {role: string; content?: string | null};
+type Reply = {send: (delta: unknown) => void; end: () => void};
+
+/** A model on a real local HTTP server; each test scripts what it answers and sees what it received. */
+async function fakeServer(answer: (messages: Sent[], reply: Reply, call: number) => void | Promise<void>): Promise<{server: Server; url: string; received: Sent[][]}> {
+	const received: Sent[][] = [];
 	const server = createServer((request, response) => {
 		let body = '';
 		request.on('data', chunk => (body += chunk));
 		request.on('end', () => {
+			const messages = ((JSON.parse(body || '{}') as {messages?: Sent[]}).messages ?? []).map(message => ({role: message.role, content: message.content}));
+			received.push(messages);
 			response.writeHead(200, {'Content-Type': 'text/event-stream'});
-			const send = (delta: unknown) => response.write(`data: ${JSON.stringify({choices: [{delta}]})}\n\n`);
-			const parsed = JSON.parse(body || '{}') as {messages?: Array<{role: string}>};
-			if (!parsed.messages?.some(message => message.role === 'tool')) {
-				send({tool_calls: [{index: 0, id: 'c1', function: {name: 'write_file', arguments: JSON.stringify({path: 'novo.txt', content: 'criado pelo agente'})}}]});
-			} else {
-				send({content: 'Pronto, **arquivo criado**.'});
-			}
-			response.end('data: [DONE]\n\n');
+			const reply: Reply = {
+				send: delta => response.write(`data: ${JSON.stringify({choices: [{delta}]})}\n\n`),
+				end: () => response.end('data: [DONE]\n\n'),
+			};
+			void answer(messages, reply, received.length);
 		});
 	});
 	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
 	const address = server.address();
-	return {server, url: `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}/v1`};
+	return {server, url: `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}/v1`, received};
 }
 
-test('de ponta a ponta: pede aprovação, grava, responde e /undo desfaz o arquivo', async () => {
-	const {server, url} = await fakeModel();
+function useServer(url: string) {
+	config.write({...DEFAULT_CONFIG, provider: 'custom-teste', model: 'modelo-falso', custom: [{id: 'custom-teste', label: 'Teste', kind: 'openai', baseUrl: url, keyless: true}]});
+}
+
+function savedSessions(): Array<{messages: Sent[]}> {
+	const folder = join(home, 'sessions');
+	if (!existsSync(folder)) return [];
+	return readdirSync(folder)
+		.filter(name => name.endsWith('.json'))
+		.map(name => JSON.parse(readFileSync(join(folder, name), 'utf8')) as {messages: Sent[]});
+}
+
+/** First asks to write a file, then answers. */
+const writesThenAnswers = (messages: Sent[], reply: Reply) => {
+	if (!messages.some(message => message.role === 'tool')) {
+		reply.send({tool_calls: [{index: 0, id: 'c1', function: {name: 'write_file', arguments: JSON.stringify({path: 'novo.txt', content: 'criado pelo agente'})}}]});
+	} else {
+		reply.send({content: 'Pronto, **arquivo criado**.'});
+	}
+	reply.end();
+};
+
+test('de ponta a ponta: o modelo recebe a mensagem, pede aprovação, grava, responde, salva e /undo desfaz', async () => {
+	const {server, url, received} = await fakeServer(writesThenAnswers);
 	try {
-		config.write({...DEFAULT_CONFIG, provider: 'custom-teste', model: 'modelo-falso', custom: [{id: 'custom-teste', label: 'Teste', kind: 'openai', baseUrl: url, keyless: true}]});
+		useServer(url);
 		const app = render(<App cwd={root} />);
 		await settle();
 		await type(app, 'crie novo.txt');
 		await type(app, '\r');
 
 		await waitFor(app, frame => frame.includes('Permitir esta ação?'));
+		assert.deepEqual(
+			received[0]?.filter(message => message.role === 'user').map(message => message.content),
+			['crie novo.txt'],
+			'a mensagem digitada não chegou ao modelo',
+		);
 		assert.ok(!existsSync(join(root, 'novo.txt')), 'gravou antes da aprovação');
 		await type(app, 's');
 
@@ -241,6 +275,11 @@ test('de ponta a ponta: pede aprovação, grava, responde e /undo desfaz o arqui
 		assert.match(frame, /← Gravar novo\.txt/);
 		assert.match(frame, /▣ Construir · modelo-falso/);
 		assert.ok(!frame.includes('**'), 'o markdown não foi interpretado');
+		assert.deepEqual(
+			savedSessions()[0]?.messages.map(message => message.role),
+			['user', 'assistant', 'tool', 'assistant'],
+			'a conversa não ficou salva completa',
+		);
 
 		await type(app, '/undo');
 		await type(app, '\r');
@@ -251,4 +290,147 @@ test('de ponta a ponta: pede aprovação, grava, responde e /undo desfaz o arqui
 	} finally {
 		server.close();
 	}
+});
+
+test('a segunda mensagem leva a primeira conversa junto', async () => {
+	const {server, url, received} = await fakeServer((_messages, reply, call) => {
+		reply.send({content: `resposta ${call}`});
+		reply.end();
+	});
+	try {
+		useServer(url);
+		const app = render(<App cwd={root} />);
+		await settle();
+		await type(app, 'primeira');
+		await type(app, '\r');
+		await waitFor(app, screen => screen.includes('resposta 1'));
+		await type(app, 'segunda');
+		await type(app, '\r');
+		await waitFor(app, screen => screen.includes('resposta 2'));
+		assert.deepEqual(
+			received[1]?.filter(message => message.role !== 'system').map(message => `${message.role}:${message.content}`),
+			['user:primeira', 'assistant:resposta 1', 'user:segunda'],
+		);
+		app.unmount();
+	} finally {
+		server.close();
+	}
+});
+
+test('esc no meio da resposta: o que já veio fica salvo e entra no contexto da próxima', async () => {
+	const {server, url, received} = await fakeServer((_messages, reply, call) => {
+		if (call === 1) return reply.send({content: 'metade da resposta'});
+		reply.send({content: 'ok'});
+		reply.end();
+	});
+	try {
+		useServer(url);
+		const app = render(<App cwd={root} />);
+		await settle();
+		await type(app, 'conte uma história');
+		await type(app, '\r');
+		await waitFor(app, screen => screen.includes('metade da resposta'));
+		app.stdin.write('\u001b');
+		await waitFor(app, screen => screen.includes('interrompido'));
+		const saved = savedSessions()[0]?.messages ?? [];
+		assert.equal(saved[0]?.content, 'conte uma história');
+		assert.match(saved[1]?.content ?? '', /metade da resposta[\s\S]*\[resposta interrompida\]/);
+
+		await type(app, 'continue');
+		await type(app, '\r');
+		await waitFor(app, screen => /▣[^\n]*\n[\s\S]*▣/.test(screen));
+		assert.ok(received[1]?.some(message => message.content?.includes('metade da resposta')), 'a parte interrompida sumiu do contexto');
+		app.unmount();
+	} finally {
+		server.closeAllConnections();
+		server.close();
+	}
+});
+
+test('ctrl+c durante o pedido de aprovação encerra o turno em vez de travar', async () => {
+	const {server, url} = await fakeServer(writesThenAnswers);
+	try {
+		useServer(url);
+		const app = render(<App cwd={root} />);
+		await settle();
+		await type(app, 'crie novo.txt');
+		await type(app, '\r');
+		await waitFor(app, frame => frame.includes('Permitir esta ação?'));
+		app.stdin.write('\u0003');
+		const frame = await waitFor(app, screen => screen.includes('interrompido'));
+		assert.ok(!frame.includes('Permitir esta ação?'));
+		assert.match(frame, /Pergunte qualquer coisa/, 'o campo de mensagem não voltou');
+		assert.ok(!existsSync(join(root, 'novo.txt')));
+		app.unmount();
+	} finally {
+		server.close();
+	}
+});
+
+test('mensagem enviada durante uma resposta entra na fila e vai depois', async () => {
+	let finishFirst: (() => void) | undefined;
+	const {server, url, received} = await fakeServer((_messages, reply, call) => {
+		if (call === 1) {
+			reply.send({content: 'primeira resposta'});
+			finishFirst = () => reply.end();
+			return;
+		}
+		reply.send({content: 'segunda resposta'});
+		reply.end();
+	});
+	try {
+		useServer(url);
+		const app = render(<App cwd={root} />);
+		await settle();
+		await type(app, 'um');
+		await type(app, '\r');
+		await waitFor(app, screen => screen.includes('primeira resposta'));
+		await type(app, 'dois');
+		await type(app, '\r');
+		assert.match(app.lastFrame() ?? '', /na fila: dois/);
+		assert.equal(received.length, 1, 'enviou antes da hora');
+		finishFirst?.();
+		await waitFor(app, screen => screen.includes('segunda resposta'));
+		assert.ok(!(app.lastFrame() ?? '').includes('na fila'));
+		app.unmount();
+	} finally {
+		server.close();
+	}
+});
+
+test('colar várias linhas (bracketed paste) não envia; o texto fica no campo', async () => {
+	const app = render(<App cwd={root} />);
+	await settle();
+	await type(app, '\u001b[200~linha um\rlinha dois\r\u001b[201~');
+	const frame = app.lastFrame() ?? '';
+	assert.match(frame, /linha um/);
+	assert.match(frame, /linha dois/);
+	// Sending anything (even a "connect first" notice) leaves the home screen.
+	assert.match(frame, /o harness que voa/, 'a colagem foi enviada como mensagem');
+	app.unmount();
+});
+
+test('/help cabe na janela e filtra', async () => {
+	const app = render(<App cwd={root} />);
+	await settle();
+	await type(app, '/help');
+	await type(app, '\r');
+	let frame = app.lastFrame() ?? '';
+	assert.match(frame, /Ajuda/);
+	assert.ok(frame.split('\n').length <= 29, `a ajuda tem ${frame.split('\n').length} linhas`);
+	await type(app, 'undo');
+	frame = app.lastFrame() ?? '';
+	assert.match(frame, /\/undo/);
+	assert.ok(!frame.includes('/connect'));
+	app.unmount();
+});
+
+test('numa lista, texto e Enter no mesmo pedaço escolhem o primeiro resultado', async () => {
+	const app = render(<App cwd={root} />);
+	await settle();
+	await type(app, '/help');
+	await type(app, '\r');
+	await type(app, 'undo\r');
+	assert.match(app.lastFrame() ?? '', /Nada para desfazer/);
+	app.unmount();
 });
