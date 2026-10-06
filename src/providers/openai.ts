@@ -1,5 +1,5 @@
 import {sseMessages} from '../sse.js';
-import type {ChatRequest, ChatResult, FetchLike, Message, ModelInfo, Provider, ProviderAuth, ToolCall, Usage} from '../types.js';
+import {CorruptOutputError, looksCorrupted, type ChatRequest, type ChatResult, type FetchLike, type Message, type ModelInfo, type Provider, type ProviderAuth, type ToolCall, type Usage} from '../types.js';
 
 const REQUEST_TIMEOUT_MS = 300_000;
 
@@ -96,6 +96,8 @@ export function openAiProvider(id: string, auth: ProviderAuth, fetchImpl: FetchL
 
 				if (typeof delta.content === 'string' && delta.content) {
 					text += delta.content;
+					// Checked on the tail only, so a long answer is not rescanned on every chunk.
+					if (looksCorrupted(text.slice(-200))) throw new CorruptOutputError();
 					onEvent({type: 'text', text: delta.content});
 				}
 				const reasoning = delta.reasoning_content ?? delta.reasoning;

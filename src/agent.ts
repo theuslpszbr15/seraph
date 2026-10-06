@@ -1,7 +1,7 @@
 import {existsSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {findTool, inside, toolsFor} from './tools.js';
-import type {AgentMode, Message, Provider, ToolCall, Usage} from './types.js';
+import {CorruptOutputError, type AgentMode, type ChatResult, type Message, type Provider, type ToolCall, type Usage} from './types.js';
 
 const MAX_STEPS = 25;
 /** Rough character budget for the history sent on each step. */
@@ -14,7 +14,9 @@ export type AgentEvent =
 	| {type: 'text'; text: string}
 	| {type: 'thinking'; text: string}
 	| {type: 'tool'; id: string; name: string; summary: string; status: ToolStatus; output?: string}
-	| {type: 'usage'; usage: Usage};
+	| {type: 'usage'; usage: Usage}
+	/** The step is being asked again; whatever was streamed for it must be discarded. */
+	| {type: 'retry'; reason: string};
 
 export type Approval = (request: {name: string; summary: string}) => Promise<boolean>;
 
@@ -44,7 +46,9 @@ export function systemPrompt(mode: AgentMode, root: string): string {
 		'Antes de afirmar que algo funciona, verifique rodando o comando ou lendo o resultado.',
 		modeText,
 		`Pasta de trabalho: ${root}`,
-		`Sistema: ${process.platform}`,
+		process.platform === 'win32'
+			? 'Sistema: Windows. A ferramenta bash roda no Windows PowerShell 5.1: use ; entre comandos (não &&) e confira se um caminho existe antes de usar -Recurse.'
+			: `Sistema: ${process.platform}`,
 	].join('\n') + rules;
 }
 
@@ -122,13 +126,23 @@ export async function runTurn(options: TurnOptions): Promise<Message[]> {
 		if (options.signal.aborted) break;
 
 		const conversation: Message[] = [{role: 'system', content: systemPrompt(options.mode, options.root)}, ...options.history, ...added];
-		const result = await options.provider.chat({
-			model: options.model,
-			messages: fitHistory(conversation),
-			tools,
-			signal: options.signal,
-			onEvent: event => options.onEvent(event),
-		});
+		const ask = () =>
+			options.provider.chat({
+				model: options.model,
+				messages: fitHistory(conversation),
+				tools,
+				signal: options.signal,
+				onEvent: event => options.onEvent(event),
+			});
+		let result: ChatResult;
+		try {
+			result = await ask();
+		} catch (error) {
+			// A leak of control tokens is usually a one-off on the provider's side: one fresh attempt.
+			if (!(error instanceof CorruptOutputError) || options.signal.aborted) throw error;
+			options.onEvent({type: 'retry', reason: 'O modelo devolveu texto corrompido; pedindo de novo.'});
+			result = await ask();
+		}
 		if (result.usage) options.onEvent({type: 'usage', usage: result.usage});
 
 		record({role: 'assistant', content: result.text, ...(result.toolCalls.length > 0 ? {toolCalls: result.toolCalls} : {})});

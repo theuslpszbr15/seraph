@@ -45,4 +45,18 @@ export type ProviderAuth = () => Promise<{baseUrl: string; headers: Record<strin
 
 export type FetchLike = typeof fetch;
 
+/** The provider leaked the model's internal control tokens: the text is garbage and must not be kept. */
+export class CorruptOutputError extends Error {
+	constructor() {
+		super('O modelo devolveu texto corrompido (tokens internos vazando do provedor). Tente de novo ou troque o modelo com /models.');
+		this.name = 'CorruptOutputError';
+	}
+}
+
+const CONTROL_TOKEN = /<\|(?:reserved_token_\d+|open|close|sep|im_start|im_end|im_sep|endoftext|start_header_id|end_header_id|eot_id)\|>/;
+
+export function looksCorrupted(text: string): boolean {
+	return CONTROL_TOKEN.test(text);
+}
+
 export type AgentMode = 'build' | 'plan';

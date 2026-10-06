@@ -46,13 +46,18 @@ function walk(folder: string, root: string, found: string[], limit: number): voi
 	}
 }
 
-function runShell(command: string, root: string, signal: AbortSignal): Promise<string> {
+// Windows PowerShell 5.1 writes in the console code page, which turns every accent into garbage.
+const POWERSHELL_PREAMBLE = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; $OutputEncoding=[Text.Encoding]::UTF8; $ProgressPreference='SilentlyContinue'; ";
+
+export function runShell(command: string, root: string, signal: AbortSignal, timeoutMs = BASH_TIMEOUT_MS): Promise<string> {
 	return new Promise(resolvePromise => {
 		const isWindows = process.platform === 'win32';
-		const child = spawn(isWindows ? 'powershell.exe' : 'sh', isWindows ? ['-NoProfile', '-Command', command] : ['-c', command], {
-			cwd: root,
-			windowsHide: true,
-		});
+		const child = spawn(
+			isWindows ? 'powershell.exe' : 'sh',
+			isWindows ? ['-NoProfile', '-NonInteractive', '-Command', POWERSHELL_PREAMBLE + command] : ['-c', command],
+			// No stdin: a command waiting for input would otherwise hang until the timeout.
+			{cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']},
+		);
 		let output = '';
 		const append = (chunk: Buffer) => {
 			if (output.length < MAX_OUTPUT * 2) output += chunk.toString('utf8');
@@ -60,14 +65,24 @@ function runShell(command: string, root: string, signal: AbortSignal): Promise<s
 		child.stdout.on('data', append);
 		child.stderr.on('data', append);
 
+		let timedOut = false;
 		const stop = () => child.kill();
 		signal.addEventListener('abort', stop, {once: true});
-		const timer = setTimeout(stop, BASH_TIMEOUT_MS);
+		const timer = setTimeout(() => {
+			timedOut = true;
+			stop();
+		}, timeoutMs);
 
 		child.on('close', code => {
 			clearTimeout(timer);
 			signal.removeEventListener('abort', stop);
-			resolvePromise(`${output.trim() || '(sem saída)'}\n[código de saída ${code ?? 'interrompido'}]`);
+			const body = output.trim() || '(sem saída)';
+			if (timedOut) {
+				resolvePromise(
+					`${body}\n[encerrado: passou de ${Math.round(timeoutMs / 1000)} s. Use um comando mais rápido, por exemplo sem -Recurse em pastas grandes, ou confira se o caminho existe.]`,
+				);
+			} else if (signal.aborted) resolvePromise(`${body}\n[interrompido pelo usuário]`);
+			else resolvePromise(`${body}\n[código de saída ${code ?? '?'}]`);
 		});
 		child.on('error', error => {
 			clearTimeout(timer);
@@ -193,7 +208,8 @@ export const TOOLS: Tool[] = [
 	},
 	{
 		name: 'bash',
-		description: 'Executa um comando no terminal, dentro da pasta do projeto (PowerShell no Windows).',
+		description:
+			'Executa um comando no terminal, dentro da pasta do projeto. No Windows é o Windows PowerShell 5.1 (sem &&; use ;). Comandos com mais de 120 s são encerrados: evite -Recurse em pastas grandes e confira se o caminho existe antes.',
 		parameters: {type: 'object', properties: {command: {type: 'string'}}, required: ['command']},
 		mutating: true,
 		summarize: args => `$ ${String(args['command'] ?? '').slice(0, 80)}`,

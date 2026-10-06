@@ -1,7 +1,7 @@
 import {mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {seraphHome} from './store.js';
-import type {Message} from './types.js';
+import {looksCorrupted, type Message} from './types.js';
 
 export type Session = {
 	id: string;
@@ -43,9 +43,19 @@ export function saveSession(session: Session): void {
 	renameSync(temp, path);
 }
 
+/** Corrupted assistant text (older versions saved it) would poison every later request. */
+export function withoutCorrupted(messages: Message[]): Message[] {
+	return messages.flatMap(message => {
+		if (message.role !== 'assistant' || !looksCorrupted(message.content)) return [message];
+		// Tool calls must keep their message, or their results lose the call they answer.
+		return message.toolCalls?.length ? [{...message, content: ''}] : [];
+	});
+}
+
 export function loadSession(id: string): Session | undefined {
 	try {
-		return JSON.parse(readFileSync(fileFor(id), 'utf8')) as Session;
+		const session = JSON.parse(readFileSync(fileFor(id), 'utf8')) as Session;
+		return {...session, messages: withoutCorrupted(session.messages)};
 	} catch {
 		return undefined;
 	}

@@ -26,6 +26,7 @@ import {deleteSession, exportMarkdown, listSessions, newSession, saveSession, ti
 import {allThemes, themeById} from './themes.js';
 import {findTool} from './tools.js';
 import type {Message} from './types.js';
+import {CorruptOutputError} from './types.js';
 import {BlockView, type Block, type NewBlock} from './ui/Blocks.js';
 import {ApprovalBox, EXIT_BUTTON, Footer, Sidebar, StatusLine, Suggestions, type SuggestionItem} from './ui/Chrome.js';
 import {formatTokens, logoSizeFor, relativeTime, relativeTo} from './ui/fit.js';
@@ -250,6 +251,10 @@ export function App({cwd, initialSession}: Props) {
 			if (event.type === 'text') patchLive({...liveRef.current, text: liveRef.current.text + event.text});
 			else if (event.type === 'thinking') patchLive({...liveRef.current, thinking: liveRef.current.thinking + event.text});
 			else if (event.type === 'usage') setUsage(total => ({total: total.total + event.usage.input + event.usage.output, context: event.usage.input + event.usage.output}));
+			else if (event.type === 'retry') {
+				patchLive({...liveRef.current, text: '', thinking: ''});
+				add({kind: 'notice', text: event.reason, tone: 'error'});
+			}
 			else {
 				flush();
 				if (event.status === 'running') {
@@ -466,7 +471,9 @@ export function App({cwd, initialSession}: Props) {
 							}),
 			});
 		} catch (error) {
-			const partial = quitting.current ? undefined : partialAnswer();
+			const corrupted = error instanceof CorruptOutputError;
+			if (corrupted) patchLive({...liveRef.current, text: '', thinking: ''});
+			const partial = quitting.current || corrupted ? undefined : partialAnswer();
 			if (partial) history.current = [...history.current, partial];
 			if (!controller.signal.aborted) notice(error instanceof Error ? error.message : String(error), 'error');
 		} finally {
