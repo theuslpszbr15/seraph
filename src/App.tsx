@@ -26,7 +26,7 @@ import {deleteSession, exportMarkdown, listSessions, newSession, saveSession, ti
 import {allThemes, themeById} from './themes.js';
 import {findTool} from './tools.js';
 import type {Message} from './types.js';
-import {CorruptOutputError} from './types.js';
+import {CorruptOutputError, RateLimitError} from './types.js';
 import {BlockView, type Block, type NewBlock} from './ui/Blocks.js';
 import {ApprovalBox, EXIT_BUTTON, Footer, Sidebar, StatusLine, Suggestions, type SuggestionItem} from './ui/Chrome.js';
 import {formatTokens, logoSizeFor, relativeTime, relativeTo} from './ui/fit.js';
@@ -62,12 +62,13 @@ type UndoEntry = {turn: number; historyLength: number; prompt: string; files: Ma
 const MAX_BLOCKS = 300;
 const SIDEBAR_MIN_COLUMNS = 110;
 const COMPACT_AT = 0.8;
-const RUNS_WHILE_BUSY = new Set(['themes', 'help', 'thinking', 'details', 'auto', 'export', 'copy', 'exit']);
+const RUNS_WHILE_BUSY = new Set(['themes', 'help', 'thinking', 'details', 'auto', 'export', 'copy', 'select', 'exit']);
 
 const SHORTCUTS: [string, string][] = [
 	['enter', 'enviar (durante uma resposta, entra na fila)'],
 	['ctrl+j', 'nova linha'],
 	['ctrl+v', 'colar'],
+	['ctrl+s', 'selecionar texto com o mouse; esc volta'],
 	['tab', 'alternar Construir / Planejar'],
 	['ctrl+p', 'paleta de comandos'],
 	['↑ ↓', 'mensagens anteriores'],
@@ -144,6 +145,11 @@ export function App({cwd, initialSession}: Props) {
 	const [tip] = useState(() => TIPS[Math.floor(Math.random() * TIPS.length)] ?? '');
 	const [customs, setCustoms] = useState(() => loadCustomCommands(cwd));
 	const [queued, setQueued] = useState<string[]>([]);
+	const [queuePaused, setQueuePaused] = useState(false);
+	const cooldowns = useRef(new Map<string, number>());
+	const [selecting, setSelecting] = useState(false);
+	const selectionFrame = useRef<React.ReactNode>(null);
+	const selectionMode = useRef(false);
 
 	const theme = themeById(preview ?? cfg.theme);
 	const history = useRef<Message[]>([]);
@@ -186,6 +192,12 @@ export function App({cwd, initialSession}: Props) {
 	const active = Math.min(pick, Math.max(suggestionItems.length - 1, 0));
 
 	useEffect(() => setPick(0), [value]);
+
+	useEffect(() => {
+		if (selectionMode.current === selecting) return;
+		selectionMode.current = selecting;
+		stdout.write(selecting ? '\u001b[?1000l\u001b[?1006l' : '\u001b[?1000h\u001b[?1006h');
+	}, [selecting, stdout]);
 
 	useEffect(() => {
 		if (initialSession) reset(initialSession);
@@ -372,11 +384,25 @@ export function App({cwd, initialSession}: Props) {
 		setOverlay(current => (current?.kind === 'models' ? {kind: 'models', items} : current));
 	}
 
+	const canRequest = () => {
+		const retryAt = cooldowns.current.get(cfg.provider) ?? 0;
+		if (retryAt <= Date.now()) return true;
+		notice(`Provedor em pausa por 429. Aguarde ${Math.ceil((retryAt - Date.now()) / 1000)}s ou escolha outro provedor com /models.`, 'error');
+		return false;
+	};
+
+	const pauseOnLimit = (error: unknown) => {
+		if (!(error instanceof RateLimitError)) return;
+		cooldowns.current.set(cfg.provider, error.retryAt);
+		setQueuePaused(true);
+	};
+
 	const compact = async (automatic = false) => {
 		if (!spec || !cfg.model || history.current.length < 2) {
 			if (!automatic) notice('Ainda não há o que resumir.');
 			return;
 		}
+		if (!canRequest()) return;
 		const controller = new AbortController();
 		abort.current = controller;
 		setBusy(true);
@@ -401,6 +427,7 @@ export function App({cwd, initialSession}: Props) {
 			save();
 			notice(automatic ? 'O contexto estava quase cheio: resumi a conversa para continuar.' : 'Conversa resumida.', 'ok');
 		} catch (error) {
+			pauseOnLimit(error);
 			notice(controller.signal.aborted ? 'Interrompido.' : error instanceof Error ? error.message : String(error), 'error');
 		} finally {
 			setBusy(false);
@@ -425,7 +452,12 @@ export function App({cwd, initialSession}: Props) {
 
 	const ask = async (shown: string, prompt?: string) => {
 		if (!spec || !cfg.model || !isConnected(spec)) return notice('Conecte um provedor e escolha um modelo com /connect.', 'error');
-		if (limit && usage.context > limit * COMPACT_AT) await compact(true);
+		if (!canRequest()) return setValue(shown);
+		if (limit && usage.context > limit * COMPACT_AT) {
+			await compact(true);
+			if (!canRequest()) return setValue(shown);
+		}
+		setQueuePaused(false);
 
 		const {prompt: expanded, attached} = expandMentions(prompt ?? shown, cwd);
 		turn.current += 1;
@@ -472,6 +504,7 @@ export function App({cwd, initialSession}: Props) {
 			});
 		} catch (error) {
 			const corrupted = error instanceof CorruptOutputError;
+			pauseOnLimit(error);
 			if (corrupted) patchLive({...liveRef.current, text: '', thinking: ''});
 			const partial = quitting.current || corrupted ? undefined : partialAnswer();
 			if (partial) history.current = [...history.current, partial];
@@ -535,6 +568,8 @@ export function App({cwd, initialSession}: Props) {
 				void writeClipboard(last.content).then(ok => notice(ok ? 'Última resposta copiada.' : 'Não consegui acessar a área de transferência.', ok ? 'ok' : 'error'));
 				return;
 			}
+			case 'select':
+				return setSelecting(current => !current);
 			case 'thinking':
 				setShowThinking(current => !current);
 				return notice(`Raciocínio ${showThinking ? 'oculto' : 'visível'}.`);
@@ -594,11 +629,11 @@ export function App({cwd, initialSession}: Props) {
 	};
 
 	useEffect(() => {
-		if (busy || queued.length === 0) return;
+		if (busy || queuePaused || queued.length === 0) return;
 		const [next, ...rest] = queued;
 		setQueued(rest);
 		if (next) dispatch(next);
-	}, [busy, queued]);
+	}, [busy, queuePaused, queued]);
 
 	const answerApproval = (answer: boolean, scope?: 'tool' | 'all') => {
 		const current = overlay;
@@ -628,6 +663,12 @@ export function App({cwd, initialSession}: Props) {
 	};
 
 	useInput((input, key) => {
+		if (key.ctrl && input === 's' && !overlay) return setSelecting(current => !current);
+		if (selecting) {
+			if (key.escape) setSelecting(false);
+			else if (key.ctrl && input === 'd') quit();
+			return;
+		}
 		const wheel = mouseWheel(input);
 		if (wheel !== undefined) {
 			if (!home && !overlay) scrollBy(wheel * 3);
@@ -910,7 +951,7 @@ export function App({cwd, initialSession}: Props) {
 			model={spec && cfg.model ? cfg.model : ''}
 			provider={spec?.label ?? ''}
 			busy={busy}
-			focus={!overlay}
+			focus={!overlay && !selecting}
 		/>
 	);
 	// Ink wraps a Box in a context provider only while it has a background, so toggling it would remount
@@ -920,7 +961,7 @@ export function App({cwd, initialSession}: Props) {
 	const hidden = Math.max(0, blocks.length - MAX_BLOCKS);
 	const runningTool = live.tools.at(-1)?.summary;
 
-	return (
+	const screen = (
 		<Box width={columns} height={Math.max(rows - 1, 8)} flexDirection="column" overflow="hidden" {...background}>
 			{home ? (
 				<Box flexGrow={1} flexDirection="column" alignItems="center" justifyContent="center">
@@ -949,9 +990,9 @@ export function App({cwd, initialSession}: Props) {
 					) : null}
 				</Box>
 			) : (
-				<Box flexGrow={1} flexDirection="row">
-					<Box flexGrow={1} flexDirection="column" paddingX={2} paddingTop={1}>
-						<Box ref={viewport} flexGrow={1} flexDirection="column" overflow="hidden" justifyContent="flex-end">
+				<Box flexGrow={1} flexShrink={1} flexBasis={0} minHeight={0} flexDirection="row">
+					<Box flexGrow={1} minHeight={0} flexDirection="column" paddingX={2} paddingTop={1}>
+						<Box ref={viewport} flexGrow={1} flexShrink={1} flexBasis={0} minHeight={0} flexDirection="column" overflow="hidden" justifyContent="flex-end">
 							<Box ref={content} flexDirection="column" flexShrink={0} marginBottom={-scroll}>
 								{hidden > 0 ? <Text color={theme.muted}>… {hidden} mensagens antigas fora da tela (use /export para ver tudo)</Text> : null}
 								{blocks.slice(hidden).map(block => (
@@ -977,6 +1018,7 @@ export function App({cwd, initialSession}: Props) {
 							</Text>
 						) : null}
 						{busy ? <StatusLine theme={theme} tick={tick} seconds={Math.floor((Date.now() - started.current) / 1000)} thinking={showThinking ? '' : live.thinking} tool={runningTool} /> : null}
+						{queuePaused && queued.length > 0 ? <Text color={theme.warn}>Fila pausada por 429; envie uma mensagem após a espera para retomar.</Text> : null}
 						{queued.map((item, index) => (
 							<Box key={`${index}-${item}`} paddingLeft={3}>
 								<Text color={theme.muted} wrap="truncate-end">
@@ -984,7 +1026,7 @@ export function App({cwd, initialSession}: Props) {
 								</Text>
 							</Box>
 						))}
-						<Box marginTop={1} flexDirection="column">
+						<Box marginTop={1} flexShrink={0} flexDirection="column">
 							{overlay ? (
 								renderOverlay()
 							) : (
@@ -1015,6 +1057,7 @@ export function App({cwd, initialSession}: Props) {
 			)}
 			<Footer
 				theme={theme}
+				selecting={selecting}
 				cwd={cwd}
 				branch={sidebar ? undefined : branch}
 				busy={busy}
@@ -1023,4 +1066,7 @@ export function App({cwd, initialSession}: Props) {
 			/>
 		</Box>
 	);
+	if (!selecting) selectionFrame.current = null;
+	else selectionFrame.current ??= screen;
+	return selectionFrame.current ?? screen;
 }

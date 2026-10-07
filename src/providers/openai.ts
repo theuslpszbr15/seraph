@@ -1,5 +1,5 @@
 import {sseMessages} from '../sse.js';
-import {CorruptOutputError, looksCorrupted, type ChatRequest, type ChatResult, type FetchLike, type Message, type ModelInfo, type Provider, type ProviderAuth, type ToolCall, type Usage} from '../types.js';
+import {CorruptOutputError, RateLimitError, looksCorrupted, type ChatRequest, type ChatResult, type FetchLike, type Message, type ModelInfo, type Provider, type ProviderAuth, type ToolCall, type Usage} from '../types.js';
 
 const REQUEST_TIMEOUT_MS = 300_000;
 
@@ -14,7 +14,14 @@ export async function failure(response: Response): Promise<Error> {
 		return new Error(`Acesso negado (${response.status}). Confira a chave em /connect. ${body}`.trim());
 	}
 	if (response.status === 404) return new Error(`Endereço ou modelo não encontrado (404). ${body}`.trim());
-	if (response.status === 429) return new Error(`Limite de uso atingido (429). ${body}`.trim());
+	if (response.status === 429) {
+		const now = Date.now();
+		const retryAfter = response.headers.get('Retry-After')?.trim();
+		const delay = retryAfter && /^\d+(?:\.\d+)?$/.test(retryAfter)
+			? Number(retryAfter) * 1000
+			: retryAfter ? Date.parse(retryAfter) - now : NaN;
+		return new RateLimitError(now + (Number.isFinite(delay) ? Math.max(1000, delay) : 60_000));
+	}
 	return new Error(`${response.status} ${response.statusText}. ${body}`.trim());
 }
 

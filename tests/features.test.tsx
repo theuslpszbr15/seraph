@@ -13,7 +13,7 @@ import {customThemes, THEMES} from '../src/themes.ts';
 import {toolLabel} from '../src/ui/Blocks.tsx';
 import {formatElapsed, formatTokens, logoSizeFor, relativeTime, shortPath} from '../src/ui/fit.ts';
 import {inlineSpans, splitParts} from '../src/ui/Markdown.tsx';
-import {mouseClick, mouseWheel} from '../src/ui/terminal.ts';
+import {isMouse, mouseClick, mouseWheel} from '../src/ui/terminal.ts';
 import type {ChatResult, Provider} from '../src/types.ts';
 
 const temp = (prefix: string) => mkdtempSync(join(tmpdir(), prefix));
@@ -104,7 +104,10 @@ test('comandos personalizados: descrição, argumentos e o projeto sobrepõe o g
 test('mouse: roda para cima/baixo, clique e texto comum', () => {
 	assert.equal(mouseWheel('[<64;10;5M'), 1);
 	assert.equal(mouseWheel('\u001b[<65;1;1M\u001b[<65;1;1M'), -2);
-	assert.equal(mouseWheel('[<0;3;4M'), 0);
+	assert.equal(mouseWheel('[<0;3;4M'), undefined);
+	assert.equal(isMouse('[<0;3;4M'), true);
+	assert.equal(isMouse('[<0;3;4m'), true);
+	assert.equal(isMouse('oi'), false);
 	assert.equal(mouseWheel('oi'), undefined);
 	assert.deepEqual(mouseClick('[<0;95;29M'), {x: 95, y: 29});
 	assert.equal(mouseClick('[<0;95;29m'), undefined);

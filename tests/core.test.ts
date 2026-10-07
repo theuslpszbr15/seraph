@@ -6,10 +6,11 @@ import {test} from 'node:test';
 import {runTurn, fitHistory, type AgentEvent} from '../src/agent.ts';
 import {angel, artWidth, mirror, wordmark} from '../src/art.ts';
 import {findCommand, parseCommand, suggest} from '../src/commands.ts';
-import {openAiProvider} from '../src/providers/openai.ts';
+import {failure, openAiProvider} from '../src/providers/openai.ts';
 import {sseMessages} from '../src/sse.ts';
 import {clip, inside, toolsFor, TOOLS} from '../src/tools.ts';
 import type {ChatRequest, ChatResult, Message, Provider} from '../src/types.ts';
+import {RateLimitError} from '../src/types.ts';
 
 const stream = (chunks: string[]) =>
 	new ReadableStream<Uint8Array>({
@@ -65,6 +66,17 @@ test('OpenAI: erro 401 vira orientação, não JSON cru', async () => {
 		provider.chat({model: 'm', messages: [], tools: [], signal: new AbortController().signal, onEvent: () => undefined}),
 		/Acesso negado.*\/connect/,
 	);
+});
+
+test('OpenAI: 429 respeita Retry-After em segundos, data e usa pausa padrao', async () => {
+	for (const [header, delay] of [['30', 30_000], [new Date(Date.now() + 120_000).toUTCString(), 120_000], ['invalido', 60_000], ['', 60_000]] as const) {
+		const started = Date.now();
+		const error = await failure(new Response('{"title":"Too Many Requests"}', {status: 429, headers: header ? {'Retry-After': header} : {}}));
+		assert.ok(error instanceof RateLimitError);
+		assert.ok(Math.abs(error.retryAt - started - delay) < 2000);
+		assert.match(error.message, /429.*Aguarde.*cota/);
+		assert.ok(!error.message.includes('Too Many Requests'));
+	}
 });
 
 test('ferramentas: caminho fora da pasta é recusado, inclusive ../ e absoluto', () => {

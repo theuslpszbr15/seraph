@@ -11,12 +11,13 @@ export function mouseWheel(input: string): number | undefined {
 		const button = Number(report[1]);
 		if (button === 64) delta += 1;
 		else if (button === 65) delta -= 1;
+		else return undefined;
 	}
 	return delta;
 }
 
 export function isMouse(input: string): boolean {
-	return mouseWheel(input) !== undefined;
+	return [...input.matchAll(REPORT)].length > 0 && input.replace(REPORT, '') === '';
 }
 
 /** A left-button press, 1-based column and row; undefined for anything else. */

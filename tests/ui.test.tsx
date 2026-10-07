@@ -8,6 +8,7 @@ import {render} from 'ink-testing-library';
 import React from 'react';
 import {App} from '../src/App.tsx';
 import {config, DEFAULT_CONFIG} from '../src/registry.ts';
+import {newSession} from '../src/sessions.ts';
 import {themeById} from '../src/themes.ts';
 import {Logo} from '../src/ui/Logo.tsx';
 
@@ -78,11 +79,53 @@ test('tela inicial cabe na janela: nome, prompt, dica e botão de sair', async (
 	app.unmount();
 });
 
-test('logo completo: o anjo aparece quando há altura', () => {
+test('logo completo mostra somente o nome, sem anjo', () => {
 	const app = render(<Logo theme={themeById('seraph')} columns={100} size="full" />);
 	const frame = app.lastFrame() ?? '';
-	assert.ok(frame.includes('▄▄▀▀▀'), 'anjo ausente');
+	assert.ok(!frame.includes('▄▄▀▀▀'), 'o anjo nao deve aparecer');
 	assert.ok(frame.includes('███████╗'));
+	app.unmount();
+});
+
+test('ampliar a janela mantem apenas o nome e nao corta o prompt', async () => {
+	const app = render(<App cwd={root} />);
+	await settle();
+	Object.defineProperty(app.stdout, 'rows', {value: 50, configurable: true});
+	app.stdout.emit('resize');
+	await settle();
+	let frame = app.lastFrame() ?? '';
+	assert.ok(!/[\u2801-\u28ff]/.test(frame));
+	assert.ok(!frame.includes('▄▄▀▀▀'));
+	assert.match(frame, /Pergunte qualquer coisa/);
+	assert.ok(frame.split('\n').length <= 49);
+	Object.defineProperty(app.stdout, 'rows', {value: 30, configurable: true});
+	app.stdout.emit('resize');
+	await settle();
+	frame = app.lastFrame() ?? '';
+	assert.ok(!/[\u2801-\u28ff]/.test(frame));
+	assert.match(frame, /Pergunte qualquer coisa/);
+	assert.ok(frame.split('\n').length <= 29);
+	app.unmount();
+});
+
+test('logo usa nome simples quando a janela e estreita', () => {
+	const app = render(<Logo theme={themeById('seraph')} columns={30} size="full" />);
+	const frame = app.lastFrame() ?? '';
+	assert.ok(!/[\u2801-\u28ff]/.test(frame));
+	assert.ok(!frame.includes('▄▄▀▀▀'));
+	assert.match(frame, /SERAPH/);
+	app.unmount();
+});
+
+test('conversa longa mantém o campo visível e aceita digitação', async () => {
+	const session = newSession(root);
+	session.messages = Array.from({length: 50}, (_, index) => ({role: 'assistant' as const, content: `Resposta ${index}: ${'texto da conversa '.repeat(20)}`}));
+	const app = render(<App cwd={root} initialSession={session} />);
+	await settle();
+	assert.match(app.lastFrame() ?? '', /Pergunte qualquer coisa/);
+	await type(app, 'posso escrever aqui');
+	assert.match(app.lastFrame() ?? '', /posso escrever aqui/);
+	assert.ok((app.lastFrame() ?? '').split('\n').length <= 29);
 	app.unmount();
 });
 
@@ -139,6 +182,37 @@ test('roda do mouse não vira texto no campo', async () => {
 	const frame = app.lastFrame() ?? '';
 	assert.ok(!frame.includes('[<64'), 'a sequência do mouse foi digitada');
 	assert.match(frame, /Pergunte qualquer coisa/);
+	app.unmount();
+});
+
+test('ctrl+s libera selecao nativa, congela a tela e esc restaura o mouse', async () => {
+	const app = render(<App cwd={root} />);
+	await settle();
+	await type(app, '\u0013');
+	assert.ok(app.frames.some(frame => frame.includes('\u001b[?1000l\u001b[?1006l')));
+	const frame = app.lastFrame();
+	await type(app, 'nao digitar durante selecao');
+	assert.equal(app.lastFrame(), frame);
+	app.stdin.write('\u001b');
+	await sleep(200);
+	assert.ok(app.frames.some(frame => frame.includes('\u001b[?1000h\u001b[?1006h')));
+	await type(app, 'digitacao restaurada');
+	assert.match(app.lastFrame() ?? '', /digitacao restaurada/);
+	app.unmount();
+});
+
+test('clicar em sair encerra a interface; clicar fora nao encerra', async () => {
+	let exited = false;
+	function ExitProbe() {
+		React.useEffect(() => () => { exited = true; }, []);
+		return null;
+	}
+	const app = render(<><App cwd={root} /><ExitProbe /></>);
+	await settle();
+	await type(app, '\u001b[<0;10;29M');
+	assert.equal(exited, false);
+	await type(app, '\u001b[<0;95;29M');
+	assert.equal(exited, true, 'o clique no botao nao encerrou o aplicativo');
 	app.unmount();
 });
 
@@ -206,7 +280,7 @@ test('/themes escolhe o tema e salva', async () => {
 });
 
 type Sent = {role: string; content?: string | null};
-type Reply = {send: (delta: unknown) => void; end: () => void};
+type Reply = {send: (delta: unknown) => void; end: () => void; rateLimit: () => void};
 
 /** A model on a real local HTTP server; each test scripts what it answers and sees what it received. */
 async function fakeServer(answer: (messages: Sent[], reply: Reply, call: number) => void | Promise<void>): Promise<{server: Server; url: string; received: Sent[][]}> {
@@ -217,10 +291,14 @@ async function fakeServer(answer: (messages: Sent[], reply: Reply, call: number)
 		request.on('end', () => {
 			const messages = ((JSON.parse(body || '{}') as {messages?: Sent[]}).messages ?? []).map(message => ({role: message.role, content: message.content}));
 			received.push(messages);
-			response.writeHead(200, {'Content-Type': 'text/event-stream'});
+			response.setHeader('Content-Type', 'text/event-stream');
 			const reply: Reply = {
 				send: delta => response.write(`data: ${JSON.stringify({choices: [{delta}]})}\n\n`),
 				end: () => response.end('data: [DONE]\n\n'),
+				rateLimit: () => {
+					response.writeHead(429, {'Content-Type': 'application/json', 'Retry-After': '60'});
+					response.end('{"title":"Too Many Requests"}');
+				},
 			};
 			void answer(messages, reply, received.length);
 		});
@@ -380,11 +458,14 @@ test('mensagem enviada durante uma resposta entra na fila e vai depois', async (
 	});
 	try {
 		useServer(url);
-		const app = render(<App cwd={root} />);
+		const session = newSession(root);
+		session.messages = Array.from({length: 50}, (_, index) => ({role: 'assistant' as const, content: `Resposta anterior ${index}: ${'texto '.repeat(40)}`}));
+		const app = render(<App cwd={root} initialSession={session} />);
 		await settle();
 		await type(app, 'um');
 		await type(app, '\r');
 		await waitFor(app, screen => screen.includes('primeira resposta'));
+		assert.match(app.lastFrame() ?? '', /escreva a próxima mensagem/);
 		await type(app, 'dois');
 		await type(app, '\r');
 		assert.match(app.lastFrame() ?? '', /na fila: dois/);
@@ -394,6 +475,31 @@ test('mensagem enviada durante uma resposta entra na fila e vai depois', async (
 		assert.ok(!(app.lastFrame() ?? '').includes('na fila'));
 		app.unmount();
 	} finally {
+		server.close();
+	}
+});
+
+test('429 pausa a fila sem apagar mensagens e bloqueia nova chamada durante a espera', async () => {
+	let rejectFirst: (() => void) | undefined;
+	const {server, url, received} = await fakeServer((_messages, reply) => { rejectFirst = reply.rateLimit; });
+	try {
+		useServer(url);
+		const app = render(<App cwd={root} />);
+		await settle();
+		await type(app, 'primeira\r');
+		await waitFor(app, () => received.length === 1);
+		await type(app, 'segunda\r');
+		assert.match(app.lastFrame() ?? '', /na fila: segunda/);
+		rejectFirst?.();
+		await waitFor(app, frame => frame.includes('Fila pausada por 429'));
+		assert.match(app.lastFrame() ?? '', /na fila: segunda/);
+		await type(app, 'tentar de novo\r');
+		assert.equal(received.length, 1);
+		assert.match(app.lastFrame() ?? '', /Provedor em pausa por 429/);
+		assert.match(app.lastFrame() ?? '', /tentar de novo/);
+		app.unmount();
+	} finally {
+		server.closeAllConnections();
 		server.close();
 	}
 });

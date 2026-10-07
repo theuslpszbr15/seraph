@@ -45,6 +45,14 @@ export type ProviderAuth = () => Promise<{baseUrl: string; headers: Record<strin
 
 export type FetchLike = typeof fetch;
 
+export class RateLimitError extends Error {
+	constructor(readonly retryAt: number) {
+		const seconds = Math.max(1, Math.ceil((retryAt - Date.now()) / 1000));
+		super(`Limite de requisições do provedor (429). Aguarde ${seconds}s antes de tentar novamente. Se persistir, confira a cota da conta ou use outro provedor com /models.`);
+		this.name = 'RateLimitError';
+	}
+}
+
 /** The provider leaked the model's internal control tokens: the text is garbage and must not be kept. */
 export class CorruptOutputError extends Error {
 	constructor() {

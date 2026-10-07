@@ -6,15 +6,8 @@ Agente de código para o terminal, no estilo do OpenCode. Conecte **qualquer API
 OpenAI, a Anthropic ou entre com o **GitHub Copilot**. Ele lê, edita arquivos e roda comandos na pasta
 onde você abriu.
 
-```text
-                ▄▄▀▀▀▀▀▀▀▀▀▀▀▀▀▄▄
-                ▀▄▄           ▄▄▀
-                  ▀▀▀▀▀▀▀▀▀▀▀▀▀
-                    ▄▄█████▄▄
-               ▄▄    █▀ ▀ ▀█    ▄▄
-             ▄▀▀▄ ▀▄▄ ▀█▄█▀ ▄▄▀ ▄▀▀▄
-          █▄▄ ▀▄▄ ▀▄▄▄█████▄▄▄▀ ▄▄▀ ▄▄█
-```
+A abertura mostra somente o nome **SERAPH**, sem anjo. Em janelas estreitas, o nome aparece
+como texto simples para preservar espaço para o campo de mensagem.
 
 ## Instalar
 
@@ -57,6 +50,7 @@ Também dá para usar variáveis de ambiente, que têm prioridade sobre a chave 
 | --- | --- |
 | `enter` / `ctrl+j` | envia / nova linha. Durante uma resposta, a mensagem entra na fila |
 | `ctrl+v` | cola (texto com várias linhas fica no campo, não é enviado) |
+| `ctrl+s` | ativa seleção nativa com o mouse e congela a tela; `esc` volta |
 | `tab` | alterna **Construir** (edita e roda) e **Planejar** (só lê); completa `/comando` e `@arquivo` |
 | `ctrl+p` | paleta de comandos |
 | `↑` `↓` | mensagens anteriores |
@@ -71,9 +65,10 @@ No campo de mensagem:
 - `!comando` roda direto no terminal e a saída entra no contexto da conversa.
 
 Comandos: `/connect` `/models` `/sessions` `/new` `/undo` `/init` `/auto` `/themes` `/thinking`
-`/details` `/compact` `/export` `/copy` `/disconnect` `/help` `/exit`.
+`/details` `/compact` `/export` `/copy` `/select` `/disconnect` `/help` `/exit`.
 
 - `/copy` copia a última resposta para a área de transferência.
+- `/select` alterna o modo de seleção: arraste para selecionar e use `Ctrl+Shift+C` no Windows Terminal para copiar. Enquanto seleciona, a tela fica congelada, mas o agente continua trabalhando. `Esc` volta à conversa e aos cliques do SERAPH.
 
 - `/undo` desfaz a última resposta **e** devolve os arquivos que ela mudou ao estado anterior.
 - `/init` pede ao agente um `AGENTS.md` para o projeto.
@@ -82,6 +77,15 @@ Comandos: `/connect` `/models` `/sessions` `/new` `/undo` `/init` `/auto` `/them
 
 Em janelas com 110 colunas ou mais aparece a barra lateral: título, contexto usado, modelo, modo e
 arquivos alterados.
+
+## Limites da API
+
+O erro `429` vem do provedor: pode ser excesso de requisições ou a cota da conta.
+O SERAPH respeita `Retry-After` quando informado; sem esse cabeçalho, usa uma pausa local de 60 segundos.
+Durante a pausa, não faz novas chamadas de conversa ao mesmo provedor e mantém a fila de mensagens sem enviá-la automaticamente.
+Após esperar, envie uma mensagem para retomar, ou escolha outro provedor com `/models`.
+Trocar apenas o modelo pode não ajudar se o limite for compartilhado pela conta.
+A pausa não garante que a cota tenha sido liberada; se o erro persistir, confira os limites no painel do provedor.
 
 ## Temas
 

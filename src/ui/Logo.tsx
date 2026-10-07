@@ -1,13 +1,12 @@
 import {Box, Text} from 'ink';
 import React from 'react';
-import {angel, artWidth, NAME, TAGLINE, wordmark} from '../art.js';
+import {artWidth, NAME, TAGLINE, wordmark} from '../art.js';
 import type {Theme} from '../themes.js';
 
 function channel(hex: string, index: number): number {
 	return Number.parseInt(hex.slice(1 + index * 2, 3 + index * 2), 16);
 }
 
-/** Blends two #rrggbb colours; the wings fade from one tone into the other. */
 export function blend(from: string, to: string, amount: number): string {
 	const part = (index: number) =>
 		Math.round(channel(from, index) + (channel(to, index) - channel(from, index)) * amount)
@@ -18,7 +17,7 @@ export function blend(from: string, to: string, amount: number): string {
 
 type Props = {theme: Theme; columns: number; size?: 'full' | 'name' | 'mini'};
 
-export function Logo({theme, columns, size = 'full'}: Props) {
+export function Logo({theme, columns, size = 'name'}: Props) {
 	if (size === 'mini') {
 		return (
 			<Text>
@@ -30,21 +29,11 @@ export function Logo({theme, columns, size = 'full'}: Props) {
 		);
 	}
 
-	const art = angel();
 	const name = wordmark();
-	const fitsAngel = size === 'full' && columns >= artWidth(art) + 2;
 	const fitsName = columns >= artWidth(name) + 2;
 
 	return (
 		<Box flexDirection="column" alignItems="center">
-			{fitsAngel
-				? art.map((line, row) => (
-						<Text key={`a${row}`} color={blend(theme.primary, theme.accent, row / Math.max(art.length - 1, 1))}>
-							{line}
-						</Text>
-					))
-				: null}
-			{fitsAngel ? <Text> </Text> : null}
 			{fitsName ? (
 				name.map((line, row) => (
 					<Text key={`n${row}`} bold color={blend(theme.accent, theme.primary, row / Math.max(name.length - 1, 1))}>

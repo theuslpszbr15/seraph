@@ -34,6 +34,7 @@ export function Suggestions({theme, items, active}: {theme: Theme; items: Sugges
 
 type FooterProps = {
 	theme: Theme;
+	selecting: boolean;
 	cwd: string;
 	branch: string | undefined;
 	busy: boolean;
@@ -42,7 +43,7 @@ type FooterProps = {
 };
 
 /** One row: where you are on the left, what you can press on the right, and a clickable exit. */
-export function Footer({theme, cwd, branch, busy, auto, tokens}: FooterProps) {
+export function Footer({theme, selecting, cwd, branch, busy, auto, tokens}: FooterProps) {
 	return (
 		<Box paddingX={1}>
 			<Box flexShrink={1} flexGrow={1}>
@@ -53,6 +54,7 @@ export function Footer({theme, cwd, branch, busy, auto, tokens}: FooterProps) {
 			</Box>
 			<Box flexShrink={0}>
 				<Text color={theme.muted}>
+					{selecting ? <Text color={theme.warn}>seleção · esc voltar · </Text> : null}
 					{auto ? <Text color={theme.warn}>auto · </Text> : null}
 					{tokens ? `${tokens} · ` : ''}
 					{busy ? (

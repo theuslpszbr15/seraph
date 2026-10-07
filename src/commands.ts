@@ -14,6 +14,7 @@ export const COMMANDS: Command[] = [
 	{name: 'compact', hint: 'resumir a conversa para liberar contexto', aliases: ['summarize']},
 	{name: 'export', hint: 'salvar a conversa em Markdown'},
 	{name: 'copy', hint: 'copiar a última resposta'},
+	{name: 'select', hint: 'alternar seleção de texto com o mouse'},
 	{name: 'disconnect', hint: 'remover as credenciais de um provedor'},
 	{name: 'help', hint: 'atalhos e comandos'},
 	{name: 'exit', hint: 'sair', aliases: ['quit', 'q']},
